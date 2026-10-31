@@ -2988,20 +2988,32 @@ static VkBuffer gmem_buf;
 static VkDeviceMemory gmem_mem;
 static uint64_t gmem_size;
 
-static bool gmem_import(uint64_t size) {
+static uint64_t gmem_ok_cap = ~0ull;  // set when the driver refused the whole heap: the largest size it accepted
+
+static bool gmem_import_once(uint64_t size) {
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
     VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
-    if (!props || props(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, (void *)(uintptr_t)HEAP_BASE, &mp) != VK_SUCCESS ||
-        !mp.memoryTypeBits)
+    if (!props) {
+        LOG("[vk] gmem import: vkGetMemoryHostPointerPropertiesEXT is missing\n");
         return false;
+    }
+    VkResult r = props(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, (void *)(uintptr_t)HEAP_BASE, &mp);
+    if (r != VK_SUCCESS || !mp.memoryTypeBits) {
+        LOG("[vk] gmem import: host pointer properties failed (result %d, memory types 0x%x)\n", (int)r, (unsigned)mp.memoryTypeBits);
+        return false;
+    }
     VkImportMemoryHostPointerInfoEXT imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
                                             .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
                                             .pHostPointer = (void *)(uintptr_t)HEAP_BASE};
     VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &imp, .allocationSize = size,
                                .memoryTypeIndex = (uint32_t)__builtin_ctz(mp.memoryTypeBits)};
     VkDeviceMemory mem;
-    if (vkAllocateMemory(g_vk.dev, &ai, NULL, &mem) != VK_SUCCESS) return false;
+    r = vkAllocateMemory(g_vk.dev, &ai, NULL, &mem);
+    if (r != VK_SUCCESS) {
+        LOG("[vk] gmem import: vkAllocateMemory of %llu MB failed (result %d)\n", (unsigned long long)(size >> 20), (int)r);
+        return false;
+    }
     VkExternalMemoryBufferCreateInfo eb = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
                                            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &eb, .size = size,
@@ -3009,8 +3021,19 @@ static bool gmem_import(uint64_t size) {
                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT};  // (uniforms read in place: cbuf_info)
     VkBuffer buf;
-    if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }
-    vkBindBufferMemory(g_vk.dev, buf, mem, 0);
+    r = vkCreateBuffer(g_vk.dev, &bi, NULL, &buf);
+    if (r != VK_SUCCESS) {
+        LOG("[vk] gmem import: vkCreateBuffer of %llu MB failed (result %d)\n", (unsigned long long)(size >> 20), (int)r);
+        vkFreeMemory(g_vk.dev, mem, NULL);
+        return false;
+    }
+    r = vkBindBufferMemory(g_vk.dev, buf, mem, 0);
+    if (r != VK_SUCCESS) {
+        LOG("[vk] gmem import: vkBindBufferMemory of %llu MB failed (result %d)\n", (unsigned long long)(size >> 20), (int)r);
+        vkDestroyBuffer(g_vk.dev, buf, NULL);
+        vkFreeMemory(g_vk.dev, mem, NULL);
+        return false;
+    }
     if (gmem_buf) {  // the heap grew: the old import may still be in use by submitted work
         vk_wait_seq(submit_seq);
         vkDestroyBuffer(g_vk.dev, gmem_buf, NULL);
@@ -3023,6 +3046,21 @@ static bool gmem_import(uint64_t size) {
     return true;
 }
 
+// The whole heap first; if the driver refuses it (an integrated GPU's limit), the largest lower part it accepts.
+static bool gmem_import(uint64_t size) {
+    if (gmem_import_once(size)) return true;
+    for (uint64_t s = (size / 4 * 3) & ~0xFFFFull; s >= (256ull << 20); s = (s / 4 * 3) & ~0xFFFFull) {
+        if (s <= gmem_size) break;  // (never shrink an import that already works)
+        if (gmem_import_once(s)) {
+            gmem_ok_cap = s;
+            LOG("[vk] the driver refused %llu MB: the lowest %llu MB of the guest heap is imported instead\n",
+                (unsigned long long)(size >> 20), (unsigned long long)(s >> 20));
+            return true;
+        }
+    }
+    return false;
+}
+
 static uint64_t gmem_tried;  // heap size the import was last attempted for (gmem_info imports / re-imports)
 
 static VkDescriptorBufferInfo gmem_info(void) {
@@ -3030,6 +3068,7 @@ static VkDescriptorBufferInfo gmem_info(void) {
     if (off < 0) off = getenv("LARECOMP_VK_NO_GMEM") != NULL || !g_vk.host_import;
     uint64_t want = (kernel_heap_size() + 0xFFFF) & ~0xFFFFull;
     if (want > HEAP_MAX) want = HEAP_MAX;
+    if (want > gmem_ok_cap) want = gmem_ok_cap;
     if (!off && want > gmem_size && !gmem_import(want)) {
         LOG("[vk] guest heap import failed (%llu MB): shader global memory reads return zero\n", (unsigned long long)(want >> 20));
         off = 1;
@@ -3049,6 +3088,7 @@ void vk_gmem_prepare(void) {
     if (off) return;
     uint64_t want = (kernel_heap_size() + 0xFFFF) & ~0xFFFFull;
     if (want > HEAP_MAX) want = HEAP_MAX;
+    if (want > gmem_ok_cap) want = gmem_ok_cap;
     if (want > gmem_size && want != gmem_tried) (void)gmem_info();
 }
 
