@@ -33,6 +33,22 @@ jobs:
           tools/fetch_zig.sh
           make dist GENARCH=-march=x86-64-v2
 
+      - name: Check the runtime libraries have no AVX or FMA
+        shell: bash
+        run: |
+          export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
+          if ! command -v llvm-objdump >/dev/null; then
+            echo "llvm-objdump not found, skipping the check"; exit 0
+          fi
+          bad=0
+          for f in build/zig-slim/rt/*.lib build/zig-slim/rt/*.obj; do
+            n=$(llvm-objdump -d --no-show-raw-insn "$f" 2>/dev/null | grep -E '^\s+[0-9a-f]+:\s+v[a-z0-9]+\s' | grep -vcE '\sv(err|erw)' || true)
+            echo "$f: $n AVX instructions"
+            if [ "$n" != "0" ]; then bad=1; fi
+          done
+          if [ "$bad" = "1" ]; then echo "FAILED: AVX instructions are still in the runtime"; exit 1; fi
+          echo "OK: no AVX or FMA in the runtime libraries"
+
       - name: Check the AVX2 popup is gone
         shell: bash
         run: |
