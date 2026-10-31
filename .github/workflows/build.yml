@@ -27,6 +27,7 @@ jobs:
         run: |
           export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
           make deps-windows
+          .venv/Scripts/python.exe -m pip install pyinstaller
           make gen-helper
           tools/fetch_zig.sh
           make dist GENARCH=-march=x86-64-v2
