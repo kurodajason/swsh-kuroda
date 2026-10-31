@@ -1,0 +1,46 @@
+name: Build SwShRecomp (no AVX2)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - name: Keep Unix line endings
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the project's tools
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools\setup_windows.ps1
+
+      - name: Build the release
+        shell: bash
+        run: |
+          export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
+          make deps-windows
+          make gen-helper
+          tools/fetch_zig.sh
+          make dist GENARCH=-march=x86-64-v2
+
+      - name: Check the AVX2 popup is gone
+        shell: bash
+        run: |
+          if grep -q "needs a CPU with AVX2" build/win-release/SwShRecomp.exe; then
+            echo "WARNING: the old AVX2 message is still inside the exe"
+          else
+            echo "OK: the old AVX2 message is gone"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SwShRecomp-no-avx2
+          path: build/dist/*.zip
