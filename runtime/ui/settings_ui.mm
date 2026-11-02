@@ -496,10 +496,11 @@ void ui_tabs_begin(int *current, int count) {
 // (Let's Go Recomp's page also has SSAO, GI, the shadow filter, TAA, FSR 3.1 and frame generation: they read that game's
 // scene passes and motion vectors, not ported to Sword's renderer)
 static const char *const *graphics_labels(int *n) {
-    static const char *l[2];
+    static const char *l[3];
     l[0] = UI_T("Frame rate", "Taxa de quadros", "Частота кадров");
     l[1] = UI_T("Anti-aliasing", "Antisserrilhado", "Сглаживание");
-    *n = 2;
+    l[2] = UI_T("Shadows", "Sombras", "Тени");
+    *n = 3;
     return l;
 }
 
