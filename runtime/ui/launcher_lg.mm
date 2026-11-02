@@ -601,6 +601,8 @@ extern "C" void launcher_lg_run(const char *root) {
                 ui_combo("##res", &res, g_pt ? res_pt : res_en, n_res);
                 ui_tip(T("Lower values make the game run faster on weak graphics cards, but the image gets blurrier.",
                          "Valores menores deixam o jogo mais rápido em placas de vídeo fracas, mas a imagem fica mais borrada."));
+                ui_tip(T("Lower values make the game run faster on weak graphics cards, but the image gets blurrier.",
+                         "Valores menores deixam o jogo mais rápido em placas de vídeo fracas, mas a imagem fica mais borrada."));
                 ui_toggle("##full", extra[1], x, &full);
                 ui_tip(T("When the game starts.", "Ao começar o jogo."));
                 ui_group_gap();
