@@ -57,6 +57,7 @@ typedef struct {
     bool blur_quality;    // the game's downsample / blur / depth-of-field composite read better (runtime/nvn/vulkan/exec.c fx_patch_fs)
     bool ui2x;            // the interface textures at 2x when cache/ui2x.pak was made (start screen; runtime/ui2x.c)
     int shadow_filter;    // SHADOW_*: how the shadow map is filtered (F12 menu; textures.c vk_sampler, translate.c shpcf)
+    bool skip_shadows;    // the shadow maps' draws are skipped (exec.c): faster on a weak GPU, no shadows (default off)
     // screen-space indirect light, one bounce (F12 menu / advanced; runtime/nvn/vulkan/exec.c gi_run). World units ~cm
     bool gi;
     float gi_intensity;   // 0..4 (default 2): x the diffuse reflectance (0.5)
