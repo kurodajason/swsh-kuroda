@@ -85,6 +85,7 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "blur_quality")) g_settings.blur_quality = atoi(val) != 0;
     else if (!strcmp(key, "shadow_filter"))
         g_settings.shadow_filter = !strcmp(val, "game") ? SHADOW_GAME : !strcmp(val, "bilinear") ? SHADOW_BILINEAR : SHADOW_SMOOTH;
+    else if (!strcmp(key, "skip_shadows")) g_settings.skip_shadows = atoi(val) != 0;
     else if (!strcmp(key, "ssao_debug")) g_settings.ssao_debug = atoi(val) != 0;  // (by hand / tests: never saved)
     else if (!strcmp(key, "mv_debug")) g_settings.mv_debug = atoi(val) != 0;      // (the same)
     else if (!strcmp(key, "mouse_sens")) g_settings.mouse_sens = (float)atof(val);
@@ -240,6 +241,7 @@ void settings_save(void) {
     fprintf(f, "blur_quality = %d\n", g_settings.blur_quality);
     fprintf(f, "shadow_filter = %s\n", g_settings.shadow_filter == SHADOW_GAME ? "game" :
                                        g_settings.shadow_filter == SHADOW_BILINEAR ? "bilinear" : "smooth");
+    fprintf(f, "skip_shadows = %d\n", g_settings.skip_shadows);
     fprintf(f, "reverb = %d\n", g_settings.reverb);
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
