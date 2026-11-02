@@ -4116,6 +4116,7 @@ static void draw_(CmdRec *r, bool indexed) {
             }
         }
         for (int i = 0; i < nskip; i++) if (last_hash == skip[i]) { stat_skipped++; return; }
+        if (g_settings.skip_shadows && (last_hash == 0 || last_hash == 0x841744ffc5458795ull)) { stat_skipped++; return; }  // (the shadow maps' draws: no fragment shader, and the alpha-tested casters)
         if (g_debug_frame && getenv("LARECOMP_LOG_FSHASH")) LOG("[fshash] fs=%llx hash %016llx\n", (unsigned long long)fs, (unsigned long long)last_hash);
         g_cur_fs_hash = last_hash;
     }
