@@ -422,11 +422,16 @@ extern "C" void launcher_lg_run(const char *root) {
     vk_imgui_backend_init();
     ImTextureID icon = icon_texture();
 
-    static const char *const res_en[] = {"Automatic", "720p", "1080p", "1440p", "4K"};
-    static const char *const res_pt[] = {"Automática", "720p", "1080p", "1440p", "4K"};
-    static const int res_lines[] = {0, 720, 1080, 1440, 2160};
-    int res = 0;
-    for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
+    static const char *const res_en[] = {"Automatic", "360p", "432p", "480p", "540p", "720p", "1080p", "1440p", "4K"};
+    static const char *const res_pt[] = {"Automática", "360p", "432p", "480p", "540p", "720p", "1080p", "1440p", "4K"};
+    static const int res_lines[] = {0, 360, 432, 480, 540, 720, 1080, 1440, 2160};
+    const int n_res = (int)(sizeof res_lines / sizeof *res_lines);
+    int res = 0, best = 1 << 30;  // (a value that isn't in the list, e.g. typed in the ini: the nearest one, not Automatic)
+    if (g_settings.res_height > 0)
+        for (int i = 1; i < n_res; i++) {
+            int d = abs(res_lines[i] - g_settings.res_height);
+            if (d < best) best = d, res = i;
+        }
     bool full = g_settings.fullscreen, wildb = g_settings.wild_battle, skipc = g_settings.skip_controller;
     mods_reload(g_settings.mod);  // (the folders under mods/: runtime/mods.h)
     long shot_at = getenv("LARECOMP_LAUNCHER_SHOT") ? atol(getenv("LARECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
@@ -593,7 +598,9 @@ extern "C" void launcher_lg_run(const char *root) {
                 const char *extra[] = {T("Resolution", "Resolução"), T("Fullscreen", "Tela cheia")};
                 float x = ui_graphics_x(extra, 2);
                 ui_row(extra[0], x);
-                ui_combo("##res", &res, g_pt ? res_pt : res_en, 5);
+                ui_combo("##res", &res, g_pt ? res_pt : res_en, n_res);
+                ui_tip(T("Lower values make the game run faster on weak graphics cards, but the image gets blurrier.",
+                         "Valores menores deixam o jogo mais rápido em placas de vídeo fracas, mas a imagem fica mais borrada."));
                 ui_toggle("##full", extra[1], x, &full);
                 ui_tip(T("When the game starts.", "Ao começar o jogo."));
                 ui_group_gap();
