@@ -529,7 +529,7 @@ void ui_page_graphics(float x, bool known) {
                              "O jogo todo a 60 fps, como o patch de 60 fps da comunidade. Vale na próxima vez que o jogo abrir.",
                              "Вся игра в 60 к/с, как патч сообщества. Применяется при следующем запуске."));
     }
-    ui_group_gap();
+   ui_group_gap();
     {
         const char *aa[] = {UI_T("Off", "Desligado", "Выкл."), "SMAA"};
         int v = g_settings.antialias == AA_SMAA ? 1 : 0;
@@ -538,9 +538,16 @@ void ui_page_graphics(float x, bool known) {
         ui_tip(UI_T("Smooths jagged edges (SMAA, on the final image).", "Suaviza os serrilhados (SMAA, na imagem final).",
                     "Сглаживает зубчатые края (SMAA, на итоговом кадре)."));
     }
+    ui_group_gap();
+    {   // Off skips the shadow maps' draws (exec.c): much less GPU work on a weak card, but no shadows
+        bool on = !g_settings.skip_shadows;
+        if (ui_toggle("##shadows", l[2], x, &on)) g_settings.skip_shadows = !on;
+        ui_tip(UI_T("Turning shadows off makes the game run faster on weak graphics cards.",
+                    "Desligar as sombras deixa o jogo mais rápido em placas de vídeo fracas.",
+                    "Без теней игра работает быстрее на слабых видеокартах."));
+    }
     settings_apply_levels();
 }
-
 // ------------------------------------------------------------------ image and sound
 // Volume and the game image's colour, applied live in game (runtime/services/audio.c apply_gain,
 // runtime/nvn/vulkan/exec.c post_process, color.frag), and the TAA sharpening at the present
