@@ -75,6 +75,8 @@ SERVICE("ssl", ssl) {
 // Setting up succeeds; a new socket fails with ENETDOWN (the network is down) and a receive returns one zero byte.
 SERVICE("bsd:u", bsd_u) {
     (void)s;
+    static int bsd_logged;  // (the first 300 commands: PIA polls a lot)
+    if (bsd_logged < 300) { bsd_logged++; LOG("[bsd] cmd %u\n", req->cmd); }
     switch (req->cmd) {
     case 2:  // Socket
     case 3:  // SocketExempt
@@ -92,16 +94,22 @@ SERVICE("bsd:u", bsd_u) {
 }
 
 // ------------------------------------------------------------------ ldn:u (local wireless)
-typedef struct { bool init; } Ldn;
-
+// States (switchbrew "LDN services"): 0 None, 1 Initialized, 2 AccessPoint, 3 AccessPointCreated, 4 Station,
+// 5 StationConnected, 6 Error
+typedef struct { int state; } Ldn;
 static void ldn_user(Service *s, IpcReq *req, IpcResp *resp) {
     Ldn *u = s->state;
+    LOG("[ldn] cmd %u (state %d)\n", req->cmd, u ? u->state : -1);
     switch (req->cmd) {
-    case 0: OUT(uint32_t, 0) = u && u->init ? 1 : 0; resp_size(resp, 4); break;  // GetState: initialized or not
-    case 100: resp->copy_handles[resp->ncopy++] = signalled_event(); break;       // GetStateChangeEvent
-    case 102: OUT(uint16_t, 0) = 0; resp_size(resp, 4); break;                    // Scan: no network found
-    case 400: if (u) u->init = true; break;                                        // Initialize
-    case 401: if (u) u->init = false; break;                                       // Finalize
+    case 0: OUT(uint32_t, 0) = u ? (uint32_t)u->state : 0; resp_size(resp, 4); break;  // GetState
+    case 100: resp->copy_handles[resp->ncopy++] = signalled_event(); break;            // AttachStateChangeEvent
+    case 102: OUT(uint16_t, 0) = 0; resp_size(resp, 4); break;                         // Scan: no network found
+    case 400:  // Initialize (older firmware)
+    case 402:  // Initialize
+    case 403:  // InitializeSystem2
+        if (u) u->state = 1;
+        break;
+    case 401: if (u) u->state = 0; break;                                               // Finalize
     default: LOG("[ldn] IUserLocalCommunicationService cmd %u (ok, no wireless)\n", req->cmd);
     }
 }
