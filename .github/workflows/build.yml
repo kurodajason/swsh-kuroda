@@ -27,7 +27,8 @@ jobs:
         run: |
           export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
           pacman -S --noconfirm zip
-          make deps-windows
+          for i in 1 2 3; do make deps-windows && break; echo "deps failed, retry $i"; sleep 30; done
+          [ -f build/deps-win/lib/libavcodec.dll.a ] || { echo "FFmpeg deps missing"; exit 1; }
           .venv/Scripts/python.exe -m pip install pyinstaller
           make gen-helper
           tools/fetch_zig.sh
