@@ -12,7 +12,7 @@
 #include "../hle.h"
 #include "../ipc.h"
 #include "../platform.h"
-
+static volatile int g_ldn_active;  // a wireless network is open: the game's bsd sockets are its wireless sockets (ldn:u below)
 // An event the game can wait on, signalled already: nothing will ever happen, so a wait on it ends at once.
 static uint32_t signalled_event(void) {
     uint32_t w, r;
@@ -112,7 +112,6 @@ SERVICE("bsd:u", bsd_u) {
 // States (switchbrew "LDN services"): 0 None, 1 Initialized, 2 AccessPoint, 3 AccessPointCreated, 4 Station,
 // 5 StationConnected, 6 Error
 typedef struct { int state; } Ldn;
-static volatile int g_ldn_active;  // a network is open: the game's bsd sockets are its wireless sockets
 
 static void ldn_set_state(Ldn *u, int st) {
     if (u) u->state = st;
