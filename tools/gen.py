@@ -527,6 +527,17 @@ def main():
     # Partition text into functions; any branch/call target outside its function becomes a new
     # boundary (splitting the containing function) until a fixpoint is reached.
     start_set = set(starts)
+
+    def inside_same_function(pc, t):
+        # `adr x, label` into the function it sits in is a jump table's base (newer compilers: byte or half-word
+        # offsets from a code label), not a callback: it must not split the function, or the table's targets end
+        # up in another "function" and the indirect jump finds no function entry there.
+        i = bisect.bisect_right(starts, pc) - 1
+        if i < 0:
+            return False
+        hi = starts[i + 1] if i + 1 < len(starts) else m.hi
+        return starts[i] < t < hi
+
     for i, w in enumerate(m.words):
         if (w & 0xFC000000) == 0x94000000:
             t = m.lo + i * 4 + sext26(w) * 4
@@ -541,7 +552,7 @@ def main():
             imm = ((w >> 5) & 0x7FFFF) << 2 | ((w >> 29) & 3)
             if imm & (1 << 20):
                 imm -= 1 << 21
-            if m.in_text(pc + imm):
+            if m.in_text(pc + imm) and not inside_same_function(pc, pc + imm):
                 start_set.add(pc + imm)
         elif (w & 0x9F000000) == 0x90000000:  # ADRP
             imm = ((w >> 5) & 0x7FFFF) << 2 | ((w >> 29) & 3)
