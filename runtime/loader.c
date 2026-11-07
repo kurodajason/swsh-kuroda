@@ -180,6 +180,56 @@ static void diag_name(uint64_t a) {
     const char *n = in_module(a) ? loader_symbol_at(a, &off) : NULL;
     LOG("  %llx = %s+%llx\n", (unsigned long long)a, n ? n : "(no symbol)", (unsigned long long)off);
 }
+// the symbol a GOT slot is bound to (from the module's relocation tables), or NULL
+static const char *got_symbol(uint64_t got) {
+    for (int mi = 0; mi < g_nmodules; mi++) {
+        Module *m = &g_modules[mi];
+        uint64_t rela = 0, relasz = 0, jmprel = 0, pltsz = 0;
+        for (uint64_t *d = (uint64_t *)m->dynamic; d[0] != DT_NULL; d += 2) {
+            if (d[0] == DT_RELA) rela = m->base + d[1];
+            if (d[0] == DT_RELASZ) relasz = d[1];
+            if (d[0] == DT_JMPREL) jmprel = m->base + d[1];
+            if (d[0] == DT_PLTRELSZ) pltsz = d[1];
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            Elf64Rela *r = (Elf64Rela *)(pass ? jmprel : rela);
+            uint64_t n = (pass ? pltsz : relasz) / sizeof(Elf64Rela);
+            for (uint64_t i = 0; i < n; i++)
+                if (m->base + r[i].off == got) {
+                    uint32_t type = (uint32_t)r[i].info, si = (uint32_t)(r[i].info >> 32);
+                    return (type == R_RELATIVE || !si) ? "(local)" : symname(m, sym(m, si));
+                }
+        }
+    }
+    return NULL;
+}
+// a PLT stub (adrp x16 / ldr x17,[x16,#o] / add / br x17): the name of the import behind it
+static const char *plt_symbol(uint64_t stub) {
+    uint32_t w0 = *(uint32_t *)stub, w1 = *(uint32_t *)(stub + 4);
+    if ((w0 & 0x9F00001F) != 0x90000010 || (w1 & 0xFFC003FF) != 0xF9400211) return NULL;
+    int64_t imm = (int64_t)((((w0 >> 5) & 0x7FFFF) << 2) | ((w0 >> 29) & 3));
+    if (imm & (1 << 20)) imm -= 1 << 21;
+    uint64_t got = (stub & ~0xFFFull) + (uint64_t)(imm << 12) + (uint64_t)((w1 >> 10) & 0xFFF) * 8;
+    return got_symbol(got);
+}
+// every `msr tpidr_el0, xN` in the modules (who sets the thread pointer)
+static void diag_tp_writers(void) {
+    int n = 0;
+    for (int mi = 0; mi < g_nmodules && n < 40; mi++) {
+        Module *m = &g_modules[mi];
+        for (uint64_t o = 0; o < m->text_size && n < 40; o += 4) {
+            uint32_t w = *(uint32_t *)(m->base + m->text_off + o);
+            if ((w & 0xFFFFFFE0) == 0xD51BD040) {
+                uint64_t a = m->base + m->text_off + o, off = 0;
+                const char *nm = loader_symbol_at(a, &off);
+                LOG("  [%s] %llx msr tpidr_el0 in %s+%llx\n", m->name, (unsigned long long)a, nm ? nm : "?", (unsigned long long)off);
+                n++;
+            }
+        }
+    }
+    if (!n) LOG("  (none)\n");
+}
+
 static void diag_code(uint64_t a, int nwords) {  // the words, and the function each bl calls
     if (!in_module(a) || !in_module(a + (uint64_t)nwords * 4 - 4)) return;
     for (int i = 0; i < nwords; i++) {
@@ -190,8 +240,10 @@ static void diag_code(uint64_t a, int nwords) {  // the words, and the function 
             if (imm & 0x02000000) imm -= 0x04000000;
             uint64_t t = pc + (uint64_t)(imm * 4), off = 0;
             const char *n = in_module(t) ? loader_symbol_at(t, &off) : NULL;
-            LOG("  %llx: %08x  bl %llx (%s+%llx)\n", (unsigned long long)pc, w, (unsigned long long)t,
-                n ? n : "?", (unsigned long long)off);
+            const char *p = in_module(t) ? plt_symbol(t) : NULL;
+            if (p) LOG("  %llx: %08x  bl %llx  PLT -> %s\n", (unsigned long long)pc, w, (unsigned long long)t, p);
+            else LOG("  %llx: %08x  bl %llx (%s+%llx)\n", (unsigned long long)pc, w, (unsigned long long)t,
+                     n ? n : "?", (unsigned long long)off);
         } else {
             LOG("  %llx: %08x\n", (unsigned long long)pc, w);
         }
@@ -268,10 +320,10 @@ void loader_load(const char *exefs) {
                                      0x7008521dc4ull, 0x7008521cfcull, 0x700851c264ull, 0x700858f708ull, 0x7002b7d830ull};
     LOG("[diag] names in the crash's call chain:\n");
     for (unsigned i = 0; i < sizeof chain / sizeof *chain; i++) diag_name(chain[i]);
-    LOG("[diag] nn::init::Start, 160 words:\n");
-    diag_code(0x70082dc200ull, 160);
-    LOG("[diag] the call site in sdk, 24 words up to the return address:\n");
-    diag_code(0x700858fac4ull, 24);
-    LOG("[diag] the function in main that crashed, 48 words:\n");
-    diag_code(0x7002b7d830ull, 48);
+    LOG("[diag] nn::init::Start (it ends after about 28 words):\n");
+    diag_code(0x70082dc200ull, 40);
+    LOG("[diag] sdk _init (DT_INIT), 64 words:\n");
+    diag_code(0x7008000030ull, 64);
+    LOG("[diag] who writes the thread pointer (msr tpidr_el0):\n");
+    diag_tp_writers();
 }
