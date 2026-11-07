@@ -164,7 +164,7 @@ static void compiler(Args *a, const Tools *t) {
 
 // ------------------------------------------------------------------ generator progress (its log)
 typedef struct {
-    const char *name;
+    const char *name, *base;  // module name, its load address (rt.h)
     char log[1100], out[1100];
     PlatProc p;
     int exit;                // -1 while running
@@ -213,6 +213,7 @@ static void log_tail(const char *path, char *out, size_t n) {  // the last line 
 typedef struct {
     char src[1100], obj[1100], log[1100];
     unsigned long long bytes;
+    const char *extra;  // one more compiler flag, or NULL
 } Unit;
 
 typedef struct {
@@ -231,6 +232,7 @@ static void add_unit(Units *us, const char *src, const char *work, const char *s
     snprintf(u->log, sizeof u->log, "%s" SEP "%s.log", work, stem);
     struct stat st;
     u->bytes = stat(src, &st) == 0 ? (unsigned long long)st.st_size : 0;
+    u->extra = NULL;
 }
 
 // The flags the game code was built with (GAMELIB_CFLAGS, part of its id). zig cc reads -march=<cpu> with its own CPU
@@ -258,6 +260,7 @@ static PlatProc start_compile(const Tools *t, const Unit *u) {
     snprintf(inc, sizeof inc, "-I%s", t->inc);
     add(&a, inc);
     add(&a, "-DGAMELIB_ID=\"" GAMELIB_ID "\"");
+    if (u->extra) add(&a, u->extra);
     add(&a, "-c");
     add(&a, u->src);
     add(&a, "-o");
@@ -300,9 +303,21 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         t.cc, t.zig ? " cc" : "", o->jobs);
 
     // 1. the generator, every module at once; their finished files are compiled while it goes on (bases: rt.h)
-    enum { NGEN = 4 };
-    Gen gens[NGEN] = {{.name = "main"}, {.name = "sdk"}, {.name = "subsdk0"}, {.name = "subsdk1"}};
-    static const char *const base[NGEN] = {"0x7000000000", "0x7004000000", "0x7006000000", "0x7008000000"};
+    // (the bases are rt.h's; subsdk1 only when the game has it: Scarlet/Violet don't)
+    enum { MAXGEN = 4 };
+    static const struct { const char *name, *base; } cand[MAXGEN] = {
+        {"main", "0x7000000000"}, {"sdk", "0x7008000000"}, {"subsdk0", "0x700C000000"}, {"subsdk1", "0x7010000000"}};
+    Gen gens[MAXGEN] = {{0}};
+    int NGEN = 0;
+    bool has_subsdk1 = true;
+    for (int i = 0; i < MAXGEN; i++) {
+        char nso[1100];
+        snprintf(nso, sizeof nso, "%s" SEP "exefs" SEP "%s", game_dir, cand[i].name);
+        if (i == 3 && !file_exists(nso)) { has_subsdk1 = false; continue; }
+        gens[NGEN].name = cand[i].name;
+        gens[NGEN].base = cand[i].base;
+        NGEN++;
+    }
     bool ok = true;
     for (int i = 0; i < NGEN && ok; i++) {
         Gen *g = &gens[i];
@@ -316,17 +331,17 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         if (t.gen_script[0]) add(&a, t.gen_script);
         add(&a, g->name);
         add(&a, nso);
-        add(&a, base[i]);
+        add(&a, g->base);
         add(&a, g->out);
-        if (i == 1) { add(&a, "--hle"); add(&a, t.hle); }
+        if (!strcmp(g->name, "sdk")) { add(&a, "--hle"); add(&a, t.hle); }
         g->p = spawn(a.v, g->log);
         args_free(&a);
         if (!g->p) { snprintf(why, why_size, "the game code builder didn't start"); ok = false; }
     }
 
     Units units = {0};
-    int queued[NGEN] = {0};  // chunk files of each module put in units so far
-    bool tables[NGEN] = {false};
+    int queued[MAXGEN] = {0};  // chunk files of each module put in units so far
+    bool tables[MAXGEN] = {false};
     int next = 0, jobs = o->jobs < 1 ? 1 : o->jobs > 64 ? 64 : o->jobs;
     struct { PlatProc p; int unit; } run[64];
     int nrun = 0;
@@ -334,6 +349,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     double shown = 0;
     {
         add_unit(&units, t.entry, work, "gamelib_entry");
+        if (!has_subsdk1) units.u[0].extra = "-DNO_SUBSDK1";  // (the entry file lists three modules, not four)
     }
     while (ok) {
         // generator progress, newly finished files

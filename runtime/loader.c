@@ -180,9 +180,12 @@ void loader_load(const char *exefs) {
     static const struct { const char *name; uint64_t base; } mods[] = {
         {"main", MAIN_BASE}, {"sdk", SDK_BASE}, {"subsdk0", SUBSDK0_BASE}, {"subsdk1", SUBSDK1_BASE}};
     for (unsigned i = 0; i < sizeof mods / sizeof mods[0]; i++) {
+        snprintf(path, sizeof path, "%s/%s", exefs, mods[i].name);
+        FILE *probe = fopen(path, "rb");
+        if (!probe && !strcmp(mods[i].name, "subsdk1")) continue;  // optional: Scarlet/Violet have only subsdk0
+        if (probe) fclose(probe);
         Module *m = &g_modules[g_nmodules++];
         m->name = mods[i].name;
-        snprintf(path, sizeof path, "%s/%s", exefs, m->name);
         load_nso(m, path, mods[i].base);
     }
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);

@@ -29,6 +29,8 @@
 #define TITLE_PIKACHU 0x010003F003A34000ull
 #define TITLE_SWORD 0x0100ABF008968000ull
 #define TITLE_SHIELD 0x01008DB008C2C000ull
+#define TITLE_SCARLET 0x0100A3D008C5C000ull  // (Scarlet/Violet: also GAME_BUILD_OTHER, no Let's Go patches)
+#define TITLE_VIOLET 0x01008F6008C5E000ull
 static const uint8_t EEVEE_100[8] = {0x0a, 0x3f, 0x0d, 0x21, 0xe6, 0x7d, 0xad, 0x80};    // Let's Go, Eevee! v1.0.0 main
 static const uint8_t PIKACHU_100[8] = {0x1c, 0x37, 0x56, 0x92, 0xde, 0x4f, 0x4b, 0x87};  // Let's Go, Pikachu! v1.0.0
 
@@ -67,7 +69,7 @@ static uint64_t program_id(const char *exefs) {
 
 static bool game_ok(const char *exefs) {
     uint64_t id = program_id(exefs);
-    return id == TITLE_EEVEE || id == TITLE_PIKACHU || id == TITLE_SWORD || id == TITLE_SHIELD;
+    return id == TITLE_EEVEE || id == TITLE_PIKACHU || id == TITLE_SWORD || id == TITLE_SHIELD || id == TITLE_VIOLET;
 }
 
 int game_build(const char *exefs) {
@@ -109,25 +111,27 @@ const char *game_version(const char *exefs) {
 const char *game_name(const char *exefs) {
     uint64_t id = program_id(exefs);
     return id == TITLE_EEVEE ? "Eevee" : id == TITLE_PIKACHU ? "Pikachu" : id == TITLE_SWORD ? "Sword"
-         : id == TITLE_SHIELD ? "Shield" : NULL;
+         : id == TITLE_SHIELD ? "Shield" : id == TITLE_VIOLET ? "Violet" : NULL;
 }
 
 const char *game_title(const char *exefs) {
     uint64_t id = program_id(exefs);
     return id == TITLE_EEVEE ? "Pokémon: Let's Go, Eevee!" : id == TITLE_PIKACHU ? "Pokémon: Let's Go, Pikachu!"
-         : id == TITLE_SWORD ? "Pokémon Sword" : id == TITLE_SHIELD ? "Pokémon Shield" : NULL;
+         : id == TITLE_SWORD ? "Pokémon Sword" : id == TITLE_SHIELD ? "Pokémon Shield" : id == TITLE_VIOLET ? "Pokémon Violet" : NULL;
 }
 
 const char *game_title_id(const char *exefs) {
     uint64_t id = program_id(exefs);
     return id == TITLE_EEVEE ? "0100187003A36000" : id == TITLE_PIKACHU ? "010003F003A34000"
-         : id == TITLE_SWORD ? "0100ABF008968000" : id == TITLE_SHIELD ? "01008DB008C2C000" : NULL;
+         : id == TITLE_SWORD ? "0100ABF008968000" : id == TITLE_SHIELD ? "01008DB008C2C000"
+         : id == TITLE_VIOLET ? "01008F6008C5E000" : NULL;
 }
 
 const char *game_pair_title_id(const char *exefs) {
     uint64_t id = program_id(exefs);
     return id == TITLE_EEVEE ? "010003F003A34000" : id == TITLE_PIKACHU ? "0100187003A36000"
-         : id == TITLE_SWORD ? "01008DB008C2C000" : id == TITLE_SHIELD ? "0100ABF008968000" : NULL;
+         : id == TITLE_SWORD ? "01008DB008C2C000" : id == TITLE_SHIELD ? "0100ABF008968000"
+         : id == TITLE_VIOLET ? "0100A3D008C5C000" : NULL;
 }
 
 bool setup_ready(void) {
@@ -146,6 +150,12 @@ static void find_game(const char *dir, int depth, Found *f) {
     }
     snprintf(p, sizeof p, "%s/bin/message", dir);
     if (!f->romfs[0] && is_dir(p)) snprintf(f->romfs, sizeof f->romfs, "%s", dir);
+    {  // Scarlet/Violet's RomFS has no bin/message: arc/ and audio/ side by side
+        char q[1100];
+        snprintf(p, sizeof p, "%s/arc", dir);
+        snprintf(q, sizeof q, "%s/audio", dir);
+        if (!f->romfs[0] && is_dir(p) && is_dir(q)) snprintf(f->romfs, sizeof f->romfs, "%s", dir);
+    }
     snprintf(p, sizeof p, "%s/romfs.bin", dir);
     if (!f->romfs_bin[0] && is_file(p)) snprintf(f->romfs_bin, sizeof f->romfs_bin, "%s", p);
     DIR *d = opendir(dir);
@@ -235,7 +245,7 @@ static void *setup_thread(void *arg) {
             char src[1100], dst[1100];
             snprintf(src, sizeof src, "%s/%s", f.exefs, code[i]);
             snprintf(dst, sizeof dst, ROOT "/exefs/%s", code[i]);
-            ok = is_file(src) && romfs_copy_file(src, dst, copy_progress);
+            ok = is_file(src) ? romfs_copy_file(src, dst, copy_progress) : !strcmp(code[i], "subsdk1");  // (subsdk1 optional)
         }
     } else
         ok = romfs_copy_tree(f.exefs, ROOT "/exefs", copy_progress);
