@@ -169,6 +169,35 @@ const char *loader_symbol_at(uint64_t addr, uint64_t *offset) {
     return best;
 }
 
+// (diagnostics, Violet bring-up) names and code words of the addresses a crash report pointed at
+static int in_module(uint64_t a) {
+    for (int i = 0; i < g_nmodules; i++)
+        if (a >= g_modules[i].base && a < g_modules[i].base + g_modules[i].size) return 1;
+    return 0;
+}
+static void diag_name(uint64_t a) {
+    uint64_t off = 0;
+    const char *n = in_module(a) ? loader_symbol_at(a, &off) : NULL;
+    LOG("  %llx = %s+%llx\n", (unsigned long long)a, n ? n : "(no symbol)", (unsigned long long)off);
+}
+static void diag_code(uint64_t a, int nwords) {  // the words, and the function each bl calls
+    if (!in_module(a) || !in_module(a + (uint64_t)nwords * 4 - 4)) return;
+    for (int i = 0; i < nwords; i++) {
+        uint64_t pc = a + (uint64_t)i * 4;
+        uint32_t w = *(uint32_t *)pc;
+        if ((w & 0xFC000000) == 0x94000000) {  // BL
+            int64_t imm = w & 0x03FFFFFF;
+            if (imm & 0x02000000) imm -= 0x04000000;
+            uint64_t t = pc + (uint64_t)(imm * 4), off = 0;
+            const char *n = in_module(t) ? loader_symbol_at(t, &off) : NULL;
+            LOG("  %llx: %08x  bl %llx (%s+%llx)\n", (unsigned long long)pc, w, (unsigned long long)t,
+                n ? n : "?", (unsigned long long)off);
+        } else {
+            LOG("  %llx: %08x\n", (unsigned long long)pc, w);
+        }
+    }
+}
+
 static uint64_t resolve(Module *m, uint32_t symidx) {
     Elf64Sym *s = sym(m, symidx);
     const char *name = symname(m, s);
@@ -204,6 +233,8 @@ static void relocate(Module *m) {
             case R_GLOB_DAT:
             case R_JUMP_SLOT: {
                 uint64_t s = resolve(m, si);
+                if ((uint64_t)where == 0x7008cd6bc0ull)  // (diagnostics) the import the last crash went through
+                    LOG("[diag] import slot %llx is the symbol %s\n", (unsigned long long)(uint64_t)where, symname(m, sym(m, si)));
                 *where = s ? s + r[i].addend : 0;
                 if (s >= HLE_BASE && s < HLE_BASE + HLE_SIZE) unresolved++;
                 break;
@@ -232,4 +263,15 @@ void loader_load(const char *exefs) {
         load_nso(m, path, mods[i].base);
     }
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
+    // (diagnostics) what the last crash's call chain is, and the code of nn::init::Start and of the function it died in
+    static const uint64_t chain[] = {0x70082dc200ull, 0x7008000030ull, 0x70085057d8ull, 0x7008504cacull, 0x70084f92fcull,
+                                     0x7008521dc4ull, 0x7008521cfcull, 0x700851c264ull, 0x700858f708ull, 0x7002b7d830ull};
+    LOG("[diag] names in the crash's call chain:\n");
+    for (unsigned i = 0; i < sizeof chain / sizeof *chain; i++) diag_name(chain[i]);
+    LOG("[diag] nn::init::Start, 160 words:\n");
+    diag_code(0x70082dc200ull, 160);
+    LOG("[diag] the call site in sdk, 24 words up to the return address:\n");
+    diag_code(0x700858fac4ull, 24);
+    LOG("[diag] the function in main that crashed, 48 words:\n");
+    diag_code(0x7002b7d830ull, 48);
 }
