@@ -14,14 +14,37 @@ S=$P/src
 mkdir -p "$S"
 JOBS=$(nproc)
 
-fetch() {  # url sha256 file
-    [ -f "$S/$3" ] || curl -fsSL -o "$S/$3.part" "$1" && { [ -f "$S/$3" ] || mv "$S/$3.part" "$S/$3"; }
-    echo "$2  $S/$3" | sha256sum -c --quiet
+# fetch url sha256 file [mirror url ...]: tries each source in turn (3 times each) and keeps the first file whose
+# checksum is right, so a source that is down, or serves something else, cannot get into the build. A file already
+# in $S with the right checksum is used as it is.
+fetch() {
+    local url=$1 sum=$2 file=$3
+    shift 3
+    if [ -f "$S/$file" ] && echo "$sum  $S/$file" | sha256sum -c --quiet 2>/dev/null; then return 0; fi
+    local u t
+    for u in "$url" "$@"; do
+        for t in 1 2 3; do
+            rm -f "$S/$file.part"
+            if curl -fsSL --connect-timeout 30 --max-time 900 -o "$S/$file.part" "$u" &&
+               echo "$sum  $S/$file.part" | sha256sum -c --quiet; then
+                mv "$S/$file.part" "$S/$file"
+                return 0
+            fi
+            echo "fetch: $u failed (try $t of 3)" >&2
+            sleep 10
+        done
+    done
+    echo "fetch: no source gave $file with the right checksum" >&2
+    return 1
 }
 unpack() { rm -rf "$S/$2" && mkdir -p "$S/$2" && tar -xf "$S/$1" -C "$S/$2" --strip-components 1; }
 
+# (the same unchanged source tarball, from ffmpeg.org first; the others are copies attached to other projects' GitHub
+# releases, used only if their checksum matches)
 fetch https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz \
-      8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e ffmpeg-9.0.2.tar.xz
+      8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e ffmpeg-9.0.2.tar.xz \
+      https://github.com/fmadore/Scriptorium/releases/download/ffmpeg-9.0.2-1/ffmpeg-9.0.2.tar.xz \
+      https://github.com/Runig006/And-Beyond/releases/download/v1.0/ffmpeg-9.0.2.tar.xz
 
 if [ ! -f "$P/lib/libavcodec.dll.a" ]; then
     unpack ffmpeg-9.0.2.tar.xz ffmpeg
