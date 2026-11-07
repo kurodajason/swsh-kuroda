@@ -98,7 +98,7 @@ static void load_nso(Module *m, const char *path, uint64_t base) {
 static Elf64Sym *sym(Module *m, uint64_t i) { return (Elf64Sym *)m->symtab + i; }
 static const char *symname(Module *m, Elf64Sym *s) { return (const char *)(m->strtab + s->name); }
 
-uint64_t loader_find_symbol(const char *name) {
+static uint64_t find_exact(const char *name) {
     for (int mi = 0; mi < g_nmodules; mi++) {
         Module *m = &g_modules[mi];
         for (uint64_t i = 1; i < m->nsyms; i++) {
@@ -106,6 +106,47 @@ uint64_t loader_find_symbol(const char *name) {
             if (s->shndx && !strcmp(symname(m, s), name)) return m->base + s->value;
         }
     }
+    return 0;
+}
+
+// (diagnostics) the defined symbols whose names contain `needle`, at most `max`
+static void log_symbols(const char *needle, int max) {
+    int n = 0;
+    for (int mi = 0; mi < g_nmodules && n < max; mi++) {
+        Module *m = &g_modules[mi];
+        for (uint64_t i = 1; i < m->nsyms && n < max; i++) {
+            Elf64Sym *s = sym(m, i);
+            if (s->shndx && strstr(symname(m, s), needle)) {
+                LOG("  [%s] %llx %s\n", m->name, (unsigned long long)(m->base + s->value), symname(m, s));
+                n++;
+            }
+        }
+    }
+    if (!n) LOG("  (none)\n");
+}
+
+uint64_t loader_find_symbol(const char *name) {
+    uint64_t a = find_exact(name);
+    static const char start_prefix[] = "_ZN2nn4init5Start";
+    if (a || strncmp(name, start_prefix, sizeof start_prefix - 1)) return a;
+    // Scarlet/Violet's SDK may spell nn::init::Start with another signature, or not export it: take any overload
+    // (same arguments as before), and log what is there either way.
+    LOG("[loader] %s is not in the game: other nn::init::Start spellings:\n", name);
+    log_symbols(start_prefix, 20);
+    for (int mi = 0; mi < g_nmodules; mi++) {
+        Module *m = &g_modules[mi];
+        for (uint64_t i = 1; i < m->nsyms; i++) {
+            Elf64Sym *s = sym(m, i);
+            if (s->shndx && !strncmp(symname(m, s), start_prefix, sizeof start_prefix - 1)) {
+                LOG("[loader] using %s\n", symname(m, s));
+                return m->base + s->value;
+            }
+        }
+    }
+    LOG("[loader] no nn::init::Start at all. Symbols with nn4init / nnMain / nninitStartup:\n");
+    log_symbols("nn4init", 100);
+    log_symbols("nnMain", 10);
+    log_symbols("nninitStartup", 10);
     return 0;
 }
 
@@ -137,6 +178,8 @@ static uint64_t resolve(Module *m, uint32_t symidx) {
     uint64_t a = loader_find_symbol(name);
     if (a) return a;
     if ((s->info >> 4) == 2) return 0;  // weak undefined
+    static int stubs_logged;  // (diagnostics: the imports nothing implements)
+    if (stubs_logged++ < 200) LOG("[loader] %s: import %s has no host implementation\n", m->name, name);
     return hle_register(name, NULL);
 }
 
