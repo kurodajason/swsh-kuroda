@@ -230,6 +230,14 @@ static void diag_tp_writers(void) {
     if (!n) LOG("  (none)\n");
 }
 
+static void diag_code(uint64_t a, int nwords);
+static void diag_sym(const char *name, int nwords) {  // the code of an exported function, from its start
+    uint64_t a = find_exact(name);
+    if (!a) { LOG("  %s: not found\n", name); return; }
+    LOG("  %s at %llx\n", name, (unsigned long long)a);
+    diag_code(a, nwords);
+}
+
 static void diag_code(uint64_t a, int nwords) {  // the words, and the function each bl calls
     if (!in_module(a) || !in_module(a + (uint64_t)nwords * 4 - 4)) return;
     for (int i = 0; i < nwords; i++) {
@@ -315,15 +323,15 @@ void loader_load(const char *exefs) {
         load_nso(m, path, mods[i].base);
     }
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
-    // (diagnostics) what the last crash's call chain is, and the code of nn::init::Start and of the function it died in
-    static const uint64_t chain[] = {0x70082dc200ull, 0x7008000030ull, 0x70085057d8ull, 0x7008504cacull, 0x70084f92fcull,
-                                     0x7008521dc4ull, 0x7008521cfcull, 0x700851c264ull, 0x700858f708ull, 0x7002b7d830ull};
-    LOG("[diag] names in the crash's call chain:\n");
-    for (unsigned i = 0; i < sizeof chain / sizeof *chain; i++) diag_name(chain[i]);
-    LOG("[diag] nn::init::Start (it ends after about 28 words):\n");
-    diag_code(0x70082dc200ull, 40);
-    LOG("[diag] sdk _init (DT_INIT), 64 words:\n");
-    diag_code(0x7008000030ull, 64);
-    LOG("[diag] who writes the thread pointer (msr tpidr_el0):\n");
-    diag_tp_writers();
+    // (diagnostics, Violet bring-up) the code that should have set the thread pointer (tpidr_el0) before the game's malloc
+    LOG("[diag] ThreadManagerImplByHorizon constructor (msr tpidr_el0 at +98), 64 words:\n");
+    diag_code(0x700837e698ull, 64);
+    LOG("[diag] __nnmusl_init_dso around its msr tpidr_el0 (+c30), 40 words:\n");
+    diag_code(0x700840e1b0ull, 40);
+    LOG("[diag] __nnmusl_init_dso, start:\n");
+    diag_sym("__nnmusl_init_dso", 32);
+    LOG("[diag] nnosInitialize:\n");
+    diag_sym("nnosInitialize", 64);
+    LOG("[diag] _init_libc0:\n");
+    diag_sym("_init_libc0", 40);
 }
