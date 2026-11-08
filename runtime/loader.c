@@ -322,7 +322,6 @@ static void relocate(Module *m) {
         if (d[0] == DT_PLTRELSZ) pltsz = d[1];
         if (d[0] == 36) relr = m->base + d[1];   // DT_RELR: packed relative relocations (newer linkers)
         if (d[0] == 35) relrsz = d[1];           // DT_RELRSZ
-        LOG("[dyn] %s tag %llx = %llx\n", m->name, (unsigned long long)d[0], (unsigned long long)d[1]);  // (diagnostics)
     }
     if (relr && relrsz) {  // each even entry is an address to fix up, each odd entry a bitmap of the next 63 words
         uint64_t *e = (uint64_t *)relr, *where = NULL, count = 0;
@@ -384,15 +383,4 @@ void loader_load(const char *exefs) {
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
     // (diagnostics, Violet bring-up, round 4) the game's default allocator pointer: it is null at the first malloc
     LOG("[diag] default allocator global 7004759418 after relocation: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
-    LOG("[diag] code that touches the default allocator global:\n");
-    diag_find_refs(0x7004759418ull);
-    {  // which relocation (if any) fills that slot
-        const char *gs = got_symbol(0x7004759418ull);
-        LOG("[diag] slot 7004759418 is filled by a relocation for: %s\n", gs ? gs : "(no relocation: plain data)");
-        for (int k = -2; k <= 2; k++) {  // and its neighbours
-            uint64_t a = 0x7004759418ull + (uint64_t)(k * 8);
-            const char *ns = got_symbol(a);
-            LOG("[diag]   slot %llx = %llx  (%s)\n", (unsigned long long)a, (unsigned long long)*(uint64_t *)a, ns ? ns : "no relocation");
-        }
-    }
 }
