@@ -22,6 +22,19 @@ static uint64_t orig(const char *name, uint64_t *cache) {
     return *cache;
 }
 
+// (diagnostics, Violet bring-up) the guest call chain from the frame pointers: return addresses with their symbols
+static void guest_chain(Cpu *c) {
+    uint64_t fp = c->x[29];
+    LOG("[heaps]   guest call chain (lr %llx):\n", (unsigned long long)c->x[30]);
+    for (int i = 0; i < 12 && fp >= GUEST_LO && fp < GUEST_HI && !(fp & 7); i++) {
+        uint64_t next = ((uint64_t *)fp)[0], ret = ((uint64_t *)fp)[1], off = 0;
+        const char *n = loader_symbol_at(ret, &off);
+        LOG("[heaps]     %llx  %s+%llx\n", (unsigned long long)ret, n ? n : "(no symbol)", (unsigned long long)off);
+        if (next <= fp) break;
+        fp = next;
+    }
+}
+
 static void fail_once(const char *what, uint64_t lr, uint64_t size) {
     static uint64_t seen[64];
     static int n;
@@ -138,6 +151,9 @@ HLE_FUNC("_ZN2nn4lmem21AllocateFromFrameHeapEPNS0_6detail8HeapHeadEmi", heap_all
 // nn::mem::StandardAllocator::Initialize(void *addr, size_t size[, bool])
 HLE_FUNC("_ZN2nn3mem17StandardAllocator10InitializeEPvm", heap_std_init) {
     uint64_t lr = c->x[30], size = c->x[2];
+    LOG("[heaps] StandardAllocator::Initialize this=%llx addr=%llx size=%llx lr=%llx\n", (unsigned long long)c->x[0],
+        (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)lr);
+    guest_chain(c);
     CALL("_ZN2nn3mem17StandardAllocator10InitializeEPvm");
     if (ENV("LARECOMP_LOG_HEAPS"))
         LOG("[heaps] standard allocator %#llx bytes from lr %llx\n", (unsigned long long)size, (unsigned long long)lr);
@@ -145,6 +161,9 @@ HLE_FUNC("_ZN2nn3mem17StandardAllocator10InitializeEPvm", heap_std_init) {
 
 HLE_FUNC("_ZN2nn3mem17StandardAllocator10InitializeEPvmb", heap_std_init_b) {
     uint64_t lr = c->x[30], size = c->x[2];
+    LOG("[heaps] StandardAllocator::Initialize(b) this=%llx addr=%llx size=%llx b=%llx lr=%llx\n", (unsigned long long)c->x[0],
+        (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3], (unsigned long long)lr);
+    guest_chain(c);
     CALL("_ZN2nn3mem17StandardAllocator10InitializeEPvmb");
     if (ENV("LARECOMP_LOG_HEAPS"))
         LOG("[heaps] standard allocator %#llx bytes (b) from lr %llx\n", (unsigned long long)size, (unsigned long long)lr);
