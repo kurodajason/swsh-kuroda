@@ -383,10 +383,14 @@ void loader_load(const char *exefs) {
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
     // (diagnostics, Violet bring-up, round 4) the game's default allocator pointer: it is null at the first malloc
     LOG("[diag] default allocator global 7004759418 after relocation: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
-    // (round 5) the code that ends in nn::mem::StandardAllocator::Initialize(this, addr = 0, ...): the function the
-    // startup calls (7002b7da90) and the one that calls Initialize (700167d510)
-    LOG("[diag] game function 7002b7da90, 100 words:\n");
-    diag_code(0x7002b7da90ull, 100);
-    LOG("[diag] game function 700167d510, 48 words:\n");
-    diag_code(0x700167d510ull, 48);
+    // (round 6) the game calls StandardAllocator::Initialize(this, addr = 0, size = 0x300000000 (12 GiB), false) on purpose
+    // (see 700167d554): what the SDK's Initialize does with a null address, and what the game's own helper returns
+    LOG("[diag] SDK StandardAllocator::Initialize (70083250cc), 96 words:\n");
+    diag_code(0x70083250ccull, 96);
+    LOG("[diag] the function it calls that ends in the abort (700816ba20), 40 words:\n");
+    diag_code(0x700816ba20ull, 40);
+    LOG("[diag] game function 700167d630 (its result is Initialize's bool), 40 words:\n");
+    diag_code(0x700167d630ull, 40);
+    LOG("[diag] game 700167d5d8 (first-use path of the static in 700167d510), 24 words:\n");
+    diag_code(0x700167d5d8ull, 24);
 }
