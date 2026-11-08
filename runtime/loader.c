@@ -98,7 +98,7 @@ static void load_nso(Module *m, const char *path, uint64_t base) {
 static Elf64Sym *sym(Module *m, uint64_t i) { return (Elf64Sym *)m->symtab + i; }
 static const char *symname(Module *m, Elf64Sym *s) { return (const char *)(m->strtab + s->name); }
 
-uint64_t loader_find_symbol(const char *name) {
+static uint64_t find_exact(const char *name) {
     for (int mi = 0; mi < g_nmodules; mi++) {
         Module *m = &g_modules[mi];
         for (uint64_t i = 1; i < m->nsyms; i++) {
@@ -106,6 +106,47 @@ uint64_t loader_find_symbol(const char *name) {
             if (s->shndx && !strcmp(symname(m, s), name)) return m->base + s->value;
         }
     }
+    return 0;
+}
+
+// (diagnostics) the defined symbols whose names contain `needle`, at most `max`
+static void log_symbols(const char *needle, int max) {
+    int n = 0;
+    for (int mi = 0; mi < g_nmodules && n < max; mi++) {
+        Module *m = &g_modules[mi];
+        for (uint64_t i = 1; i < m->nsyms && n < max; i++) {
+            Elf64Sym *s = sym(m, i);
+            if (s->shndx && strstr(symname(m, s), needle)) {
+                LOG("  [%s] %llx %s\n", m->name, (unsigned long long)(m->base + s->value), symname(m, s));
+                n++;
+            }
+        }
+    }
+    if (!n) LOG("  (none)\n");
+}
+
+uint64_t loader_find_symbol(const char *name) {
+    uint64_t a = find_exact(name);
+    static const char start_prefix[] = "_ZN2nn4init5Start";
+    if (a || strncmp(name, start_prefix, sizeof start_prefix - 1)) return a;
+    // Scarlet/Violet's SDK may spell nn::init::Start with another signature, or not export it: take any overload
+    // (same arguments as before), and log what is there either way.
+    LOG("[loader] %s is not in the game: other nn::init::Start spellings:\n", name);
+    log_symbols(start_prefix, 20);
+    for (int mi = 0; mi < g_nmodules; mi++) {
+        Module *m = &g_modules[mi];
+        for (uint64_t i = 1; i < m->nsyms; i++) {
+            Elf64Sym *s = sym(m, i);
+            if (s->shndx && !strncmp(symname(m, s), start_prefix, sizeof start_prefix - 1)) {
+                LOG("[loader] using %s\n", symname(m, s));
+                return m->base + s->value;
+            }
+        }
+    }
+    LOG("[loader] no nn::init::Start at all. Symbols with nn4init / nnMain / nninitStartup:\n");
+    log_symbols("nn4init", 100);
+    log_symbols("nnMain", 10);
+    log_symbols("nninitStartup", 10);
     return 0;
 }
 
@@ -128,6 +169,95 @@ const char *loader_symbol_at(uint64_t addr, uint64_t *offset) {
     return best;
 }
 
+// (diagnostics, Violet bring-up) names and code words of the addresses a crash report pointed at
+static int in_module(uint64_t a) {
+    for (int i = 0; i < g_nmodules; i++)
+        if (a >= g_modules[i].base && a < g_modules[i].base + g_modules[i].size) return 1;
+    return 0;
+}
+static void diag_name(uint64_t a) {
+    uint64_t off = 0;
+    const char *n = in_module(a) ? loader_symbol_at(a, &off) : NULL;
+    LOG("  %llx = %s+%llx\n", (unsigned long long)a, n ? n : "(no symbol)", (unsigned long long)off);
+}
+// the symbol a GOT slot is bound to (from the module's relocation tables), or NULL
+static const char *got_symbol(uint64_t got) {
+    for (int mi = 0; mi < g_nmodules; mi++) {
+        Module *m = &g_modules[mi];
+        uint64_t rela = 0, relasz = 0, jmprel = 0, pltsz = 0;
+        for (uint64_t *d = (uint64_t *)m->dynamic; d[0] != DT_NULL; d += 2) {
+            if (d[0] == DT_RELA) rela = m->base + d[1];
+            if (d[0] == DT_RELASZ) relasz = d[1];
+            if (d[0] == DT_JMPREL) jmprel = m->base + d[1];
+            if (d[0] == DT_PLTRELSZ) pltsz = d[1];
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            Elf64Rela *r = (Elf64Rela *)(pass ? jmprel : rela);
+            uint64_t n = (pass ? pltsz : relasz) / sizeof(Elf64Rela);
+            for (uint64_t i = 0; i < n; i++)
+                if (m->base + r[i].off == got) {
+                    uint32_t type = (uint32_t)r[i].info, si = (uint32_t)(r[i].info >> 32);
+                    return (type == R_RELATIVE || !si) ? "(local)" : symname(m, sym(m, si));
+                }
+        }
+    }
+    return NULL;
+}
+// a PLT stub (adrp x16 / ldr x17,[x16,#o] / add / br x17): the name of the import behind it
+static const char *plt_symbol(uint64_t stub) {
+    uint32_t w0 = *(uint32_t *)stub, w1 = *(uint32_t *)(stub + 4);
+    if ((w0 & 0x9F00001F) != 0x90000010 || (w1 & 0xFFC003FF) != 0xF9400211) return NULL;
+    int64_t imm = (int64_t)((((w0 >> 5) & 0x7FFFF) << 2) | ((w0 >> 29) & 3));
+    if (imm & (1 << 20)) imm -= 1 << 21;
+    uint64_t got = (stub & ~0xFFFull) + (uint64_t)(imm << 12) + (uint64_t)((w1 >> 10) & 0xFFF) * 8;
+    return got_symbol(got);
+}
+// every `msr tpidr_el0, xN` in the modules (who sets the thread pointer)
+static void diag_tp_writers(void) {
+    int n = 0;
+    for (int mi = 0; mi < g_nmodules && n < 40; mi++) {
+        Module *m = &g_modules[mi];
+        for (uint64_t o = 0; o < m->text_size && n < 40; o += 4) {
+            uint32_t w = *(uint32_t *)(m->base + m->text_off + o);
+            if ((w & 0xFFFFFFE0) == 0xD51BD040) {
+                uint64_t a = m->base + m->text_off + o, off = 0;
+                const char *nm = loader_symbol_at(a, &off);
+                LOG("  [%s] %llx msr tpidr_el0 in %s+%llx\n", m->name, (unsigned long long)a, nm ? nm : "?", (unsigned long long)off);
+                n++;
+            }
+        }
+    }
+    if (!n) LOG("  (none)\n");
+}
+
+static void diag_code(uint64_t a, int nwords);
+static void diag_sym(const char *name, int nwords) {  // the code of an exported function, from its start
+    uint64_t a = find_exact(name);
+    if (!a) { LOG("  %s: not found\n", name); return; }
+    LOG("  %s at %llx\n", name, (unsigned long long)a);
+    diag_code(a, nwords);
+}
+
+static void diag_code(uint64_t a, int nwords) {  // the words, and the function each bl calls
+    if (!in_module(a) || !in_module(a + (uint64_t)nwords * 4 - 4)) return;
+    for (int i = 0; i < nwords; i++) {
+        uint64_t pc = a + (uint64_t)i * 4;
+        uint32_t w = *(uint32_t *)pc;
+        if ((w & 0xFC000000) == 0x94000000) {  // BL
+            int64_t imm = w & 0x03FFFFFF;
+            if (imm & 0x02000000) imm -= 0x04000000;
+            uint64_t t = pc + (uint64_t)(imm * 4), off = 0;
+            const char *n = in_module(t) ? loader_symbol_at(t, &off) : NULL;
+            const char *p = in_module(t) ? plt_symbol(t) : NULL;
+            if (p) LOG("  %llx: %08x  bl %llx  PLT -> %s\n", (unsigned long long)pc, w, (unsigned long long)t, p);
+            else LOG("  %llx: %08x  bl %llx (%s+%llx)\n", (unsigned long long)pc, w, (unsigned long long)t,
+                     n ? n : "?", (unsigned long long)off);
+        } else {
+            LOG("  %llx: %08x\n", (unsigned long long)pc, w);
+        }
+    }
+}
+
 static uint64_t resolve(Module *m, uint32_t symidx) {
     Elf64Sym *s = sym(m, symidx);
     const char *name = symname(m, s);
@@ -137,16 +267,36 @@ static uint64_t resolve(Module *m, uint32_t symidx) {
     uint64_t a = loader_find_symbol(name);
     if (a) return a;
     if ((s->info >> 4) == 2) return 0;  // weak undefined
+    static int stubs_logged;  // (diagnostics: the imports nothing implements)
+    if (stubs_logged++ < 200) LOG("[loader] %s: import %s has no host implementation\n", m->name, name);
     return hle_register(name, NULL);
 }
 
 static void relocate(Module *m) {
-    uint64_t rela = 0, relasz = 0, jmprel = 0, pltsz = 0;
+    uint64_t rela = 0, relasz = 0, jmprel = 0, pltsz = 0, relr = 0, relrsz = 0;
     for (uint64_t *d = (uint64_t *)m->dynamic; d[0] != DT_NULL; d += 2) {
         if (d[0] == DT_RELA) rela = m->base + d[1];
         if (d[0] == DT_RELASZ) relasz = d[1];
         if (d[0] == DT_JMPREL) jmprel = m->base + d[1];
         if (d[0] == DT_PLTRELSZ) pltsz = d[1];
+        if (d[0] == 36) relr = m->base + d[1];   // DT_RELR: packed relative relocations (newer linkers)
+        if (d[0] == 35) relrsz = d[1];           // DT_RELRSZ
+        LOG("[dyn] %s tag %llx = %llx\n", m->name, (unsigned long long)d[0], (unsigned long long)d[1]);  // (diagnostics)
+    }
+    if (relr && relrsz) {  // each even entry is an address to fix up, each odd entry a bitmap of the next 63 words
+        uint64_t *e = (uint64_t *)relr, *where = NULL, count = 0;
+        for (uint64_t i = 0; i < relrsz / 8; i++) {
+            if (!(e[i] & 1)) {
+                where = (uint64_t *)(m->base + e[i]);
+                *where += m->base; count++; where++;
+            } else {
+                uint64_t bits = e[i] >> 1;
+                for (int j = 0; bits; j++, bits >>= 1)
+                    if (bits & 1) { where[j] += m->base; count++; }
+                where += 63;
+            }
+        }
+        LOG("[reloc] %s: %llu packed (RELR) relative relocations applied\n", m->name, (unsigned long long)count);
     }
     int unresolved = 0;
     for (int pass = 0; pass < 2; pass++) {
@@ -161,6 +311,8 @@ static void relocate(Module *m) {
             case R_GLOB_DAT:
             case R_JUMP_SLOT: {
                 uint64_t s = resolve(m, si);
+                if ((uint64_t)where == 0x7008cd6bc0ull)  // (diagnostics) the import the last crash went through
+                    LOG("[diag] import slot %llx is the symbol %s\n", (unsigned long long)(uint64_t)where, symname(m, sym(m, si)));
                 *where = s ? s + r[i].addend : 0;
                 if (s >= HLE_BASE && s < HLE_BASE + HLE_SIZE) unresolved++;
                 break;
@@ -180,10 +332,15 @@ void loader_load(const char *exefs) {
     static const struct { const char *name; uint64_t base; } mods[] = {
         {"main", MAIN_BASE}, {"sdk", SDK_BASE}, {"subsdk0", SUBSDK0_BASE}, {"subsdk1", SUBSDK1_BASE}};
     for (unsigned i = 0; i < sizeof mods / sizeof mods[0]; i++) {
+        snprintf(path, sizeof path, "%s/%s", exefs, mods[i].name);
+        FILE *probe = fopen(path, "rb");
+        if (!probe && !strcmp(mods[i].name, "subsdk1")) continue;  // optional: Scarlet/Violet have only subsdk0
+        if (probe) fclose(probe);
         Module *m = &g_modules[g_nmodules++];
         m->name = mods[i].name;
-        snprintf(path, sizeof path, "%s/%s", exefs, m->name);
         load_nso(m, path, mods[i].base);
     }
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
+    // (diagnostics, Violet bring-up, round 4) the game's default allocator pointer: it is null at the first malloc
+    LOG("[diag] default allocator global 7004759418 after relocation: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
 }
