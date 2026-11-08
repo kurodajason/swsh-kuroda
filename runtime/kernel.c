@@ -754,6 +754,42 @@ static void svc_entry(Cpu *c, uint32_t imm, uint64_t pc) {
         c->x[1], c->x[2], pc, (unsigned long long)c->tpidr);
 }
 
+// (diagnostics, Violet bring-up) why the SDK aborted (svcBreak): the guest call chain from the frame pointers, and the
+// text strings (assert expression, function, file) that the abort path left on the stack
+static int in_game_module(uint64_t v) {
+    for (int i = 0; i < g_nmodules; i++)
+        if (v >= g_modules[i].base && v < g_modules[i].base + g_modules[i].size) return 1;
+    return 0;
+}
+static void break_report(Cpu *c) {
+    uint64_t fp = c->x[29];
+    LOG("[break] guest call chain (lr %llx):\n", (unsigned long long)c->x[30]);
+    for (int i = 0; i < 16 && fp >= GUEST_LO && fp < GUEST_HI && !(fp & 7); i++) {
+        uint64_t next = ((uint64_t *)fp)[0], ret = ((uint64_t *)fp)[1], off = 0;
+        const char *n = in_game_module(ret) ? loader_symbol_at(ret, &off) : NULL;
+        LOG("[break]   %llx  %s+%llx\n", (unsigned long long)ret, n ? n : "(no symbol)", (unsigned long long)off);
+        if (next <= fp) break;
+        fp = next;
+    }
+    LOG("[break] strings pointed to from the stack (sp %llx):\n", (unsigned long long)c->sp);
+    uint64_t seen[48];
+    int ns = 0;
+    for (uint64_t a = c->sp; a < c->sp + 0xA00 && a + 8 <= GUEST_HI && ns < 48; a += 8) {
+        uint64_t v = *(uint64_t *)a;
+        if (!in_game_module(v) || !in_game_module(v + 64)) continue;
+        const unsigned char *s = (const unsigned char *)v;
+        int len = 0;
+        while (len < 200 && s[len] >= 0x20 && s[len] < 0x7F) len++;
+        if (len < 4 || s[len] != 0) continue;
+        int dup = 0;
+        for (int i = 0; i < ns; i++) if (seen[i] == v) dup = 1;
+        if (dup) continue;
+        seen[ns++] = v;
+        LOG("[break]   sp+%llx -> %llx \"%s\"\n", (unsigned long long)(a - c->sp), (unsigned long long)v, (const char *)s);
+    }
+    if (!ns) LOG("[break]   (none)\n");
+}
+
 static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
     uint64_t *x = c->x;
     switch (imm) {
@@ -930,6 +966,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
             uint32_t res = *(uint32_t *)(uintptr_t)x[1];
             LOG("[kernel] svcBreak result %#x = %04u-%04u\n", res, 2000 + (res & 0x1FF), (res >> 9) & 0x1FFF);
         }
+        break_report(c);
         FATAL("svcBreak(reason=%llx, info=%llx, size=%llx) at %llx\n", x[0], x[1], x[2], pc);
     case 0x27: debug_string(x[0], x[1]); x[0] = R_OK; break;
     case 0x29: {  // GetInfo(_, id0, handle, id1)
