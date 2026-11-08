@@ -323,12 +323,15 @@ void loader_load(const char *exefs) {
         load_nso(m, path, mods[i].base);
     }
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
-    // (diagnostics, Violet bring-up, round 2) the game's malloc, which now crashes later (+0x176), and the
-    // __nnmusl_init_dso branch that decides whether the thread block gets built
-    LOG("[diag] malloc in main (f_7002b7d830), 160 words:\n");
-    diag_code(0x7002b7d830ull, 160);
-    LOG("[diag] __nnmusl_init_dso, first 96 words:\n");
-    diag_code(0x700840d5e0ull, 96);
-    LOG("[diag] __nnmusl_init_dso, branch target of the allocator check (+97c), 40 words:\n");
-    diag_code(0x700840dfa0ull, 40);
+    // (diagnostics, Violet bring-up, round 3) who calls the init function and with what: nn::init::Start itself,
+    // the function pointer it hands to the init hook, and the game's startup hook
+    LOG("[diag] nn::init::Start (3-pointer spelling), 128 words:\n");
+    diag_sym("_ZN2nn4init5StartEmmPFvvES2_S2_", 128);
+    LOG("[diag] function passed to the init hook (700837acb0):\n");
+    diag_name(0x700837acb0ull);
+    diag_code(0x700837acb0ull, 48);
+    LOG("[diag] nninitStartup:\n");
+    diag_sym("nninitStartup", 48);
+
+    LOG("[diag] value there now: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
 }

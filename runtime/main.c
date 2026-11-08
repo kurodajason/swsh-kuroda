@@ -32,9 +32,15 @@ static void module_init(Cpu *c, Module *m) {
 }
 
 static void rtld_init_sdk(Cpu *c) {  // the SDK, then the subsdk modules that link against it
+    LOG("[rtld] init hook (sdk) called: x0=%llx x1=%llx x2=%llx x3=%llx lr=%llx\n", (unsigned long long)c->x[0],
+        (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3], (unsigned long long)c->x[30]);
     for (int i = 1; i < g_nmodules; i++) module_init(c, &g_modules[i]);
 }
-static void rtld_init_main(Cpu *c) { module_init(c, &g_modules[0]); }
+static void rtld_init_main(Cpu *c) {
+    LOG("[rtld] init hook (main) called: x0=%llx x1=%llx lr=%llx\n", (unsigned long long)c->x[0],
+        (unsigned long long)c->x[1], (unsigned long long)c->x[30]);
+    module_init(c, &g_modules[0]);
+}
 
 // Claim the guest address range before anything else can map there. The host allocator places
 // regions at random addresses in the same window; on a collision, re-exec for a fresh layout.
