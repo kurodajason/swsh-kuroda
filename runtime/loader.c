@@ -266,7 +266,11 @@ static uint64_t resolve(Module *m, uint32_t symidx) {
     if (impl) return hle_register(name, impl);  // host implementation wins over the guest SDK's
     uint64_t a = loader_find_symbol(name);
     if (a) return a;
-    if ((s->info >> 4) == 2) return 0;  // weak undefined
+    if ((s->info >> 4) == 2) {  // weak undefined
+        static int weak_logged;  // (diagnostics, Violet bring-up: a weak import that resolves to null)
+        if (weak_logged++ < 80) LOG("[loader] %s: weak undefined import %s -> null\n", m->name, name);
+        return 0;
+    }
     static int stubs_logged;  // (diagnostics: the imports nothing implements)
     if (stubs_logged++ < 200) LOG("[loader] %s: import %s has no host implementation\n", m->name, name);
     return hle_register(name, NULL);
@@ -343,4 +347,13 @@ void loader_load(const char *exefs) {
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
     // (diagnostics, Violet bring-up, round 4) the game's default allocator pointer: it is null at the first malloc
     LOG("[diag] default allocator global 7004759418 after relocation: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
+    {  // which relocation (if any) fills that slot
+        const char *gs = got_symbol(0x7004759418ull);
+        LOG("[diag] slot 7004759418 is filled by a relocation for: %s\n", gs ? gs : "(no relocation: plain data)");
+        for (int k = -2; k <= 2; k++) {  // and its neighbours
+            uint64_t a = 0x7004759418ull + (uint64_t)(k * 8);
+            const char *ns = got_symbol(a);
+            LOG("[diag]   slot %llx = %llx  (%s)\n", (unsigned long long)a, (unsigned long long)*(uint64_t *)a, ns ? ns : "no relocation");
+        }
+    }
 }
