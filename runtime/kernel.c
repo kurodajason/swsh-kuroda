@@ -250,6 +250,15 @@ static KThread *thread_new(uint64_t entry, uint64_t arg, uint64_t stack_top, int
     t->tlr = tls_next;
     tls_next += 0x200;
     t->cpu.tpidrro = t->tlr;
+    // Violet (no subsdk1): give the thread a zeroed "thread block" and point both the thread pointer
+    // (tpidr_el0) and TLS+0x1F0 (what the SDK copies into tpidr_el0) at it. Without it the game's first
+    // malloc reads [0 + 0x30] and crashes. The blocks live in the upper half of the TLS region.
+    if (g_nmodules < 4 && t->tlr < TLS_BASE + 0x80000) {
+        uint64_t blk = TLS_BASE + 0x80000 + (t->tlr - TLS_BASE) / 0x200 * 0x200;
+        memset((void *)(uintptr_t)blk, 0, 0x200);
+        *(uint64_t *)(uintptr_t)(t->tlr + 0x1F0) = blk;
+        t->cpu.tpidr = blk;
+    }
     t->cpu.thread = t;
     pthread_mutex_lock(&g_klock);
     t->anext = g_threads;
