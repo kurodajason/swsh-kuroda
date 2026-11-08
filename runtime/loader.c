@@ -258,6 +258,43 @@ static void diag_code(uint64_t a, int nwords) {  // the words, and the function 
     }
 }
 
+// (diagnostics, Violet bring-up) every instruction that reads, writes or takes the address of `addr`, found by the
+// adrp + ldr/str/add pattern the compiler uses for globals
+static void diag_find_refs(uint64_t addr) {
+    uint64_t page = addr & ~0xFFFull, off = addr & 0xFFF;
+    int n = 0;
+    for (int mi = 0; mi < g_nmodules; mi++) {
+        Module *m = &g_modules[mi];
+        uint64_t t0 = m->base + m->text_off;
+        for (uint64_t o = 0; o + 4 <= m->text_size && n < 60; o += 4) {
+            uint32_t w = *(uint32_t *)(t0 + o);
+            if ((w & 0x9F000000) != 0x90000000) continue;  // adrp
+            uint64_t pc = t0 + o;
+            int64_t imm = (int64_t)((((w >> 5) & 0x7FFFF) << 2) | ((w >> 29) & 3));
+            if (imm & (1 << 20)) imm -= 1 << 21;
+            if (((pc & ~0xFFFull) + (uint64_t)(imm << 12)) != page) continue;
+            uint32_t rd = w & 0x1F;
+            for (int k = 1; k <= 32 && o + 4 * (uint64_t)k < m->text_size; k++) {
+                uint32_t v = *(uint32_t *)(pc + 4 * (uint64_t)k);
+                if (((v >> 5) & 0x1F) != rd) continue;
+                uint32_t i12 = (v >> 10) & 0xFFF;
+                const char *kind = NULL;
+                if ((v & 0xFFC00000) == 0xF9000000 && i12 == off / 8) kind = "STORE (64-bit)";
+                else if ((v & 0xFFC00000) == 0xB9000000 && i12 == off / 4) kind = "STORE (32-bit)";
+                else if ((v & 0xFFC00000) == 0xF9400000 && i12 == off / 8) kind = "load (64-bit)";
+                else if ((v & 0xFFC00000) == 0x91000000 && i12 == off) kind = "address taken (add)";
+                if (!kind) continue;
+                uint64_t a = pc + 4 * (uint64_t)k, so = 0;
+                const char *sn = loader_symbol_at(a, &so);
+                LOG("[refs] %llx %s in %s+%llx\n", (unsigned long long)a, kind, sn ? sn : "(no symbol)", (unsigned long long)so);
+                n++;
+                break;
+            }
+        }
+    }
+    if (!n) LOG("[refs] nothing refers to %llx\n", (unsigned long long)addr);
+}
+
 static uint64_t resolve(Module *m, uint32_t symidx) {
     Elf64Sym *s = sym(m, symidx);
     const char *name = symname(m, s);
@@ -347,6 +384,8 @@ void loader_load(const char *exefs) {
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
     // (diagnostics, Violet bring-up, round 4) the game's default allocator pointer: it is null at the first malloc
     LOG("[diag] default allocator global 7004759418 after relocation: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
+    LOG("[diag] code that touches the default allocator global:\n");
+    diag_find_refs(0x7004759418ull);
     {  // which relocation (if any) fills that slot
         const char *gs = got_symbol(0x7004759418ull);
         LOG("[diag] slot 7004759418 is filled by a relocation for: %s\n", gs ? gs : "(no relocation: plain data)");

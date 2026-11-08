@@ -34,12 +34,16 @@ static void module_init(Cpu *c, Module *m) {
 static void rtld_init_sdk(Cpu *c) {  // the SDK, then the subsdk modules that link against it
     LOG("[rtld] init hook (sdk) called: x0=%llx x1=%llx x2=%llx x3=%llx lr=%llx\n", (unsigned long long)c->x[0],
         (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3], (unsigned long long)c->x[30]);
+    // EXPERIMENT (Violet only, no subsdk1): the SDK's constructors call the game's malloc, whose default allocator is
+    // still null this early. Wait for the game's own startup (nninitStartup) and run them with the main module's.
+    if (g_nmodules < 4) { LOG("[rtld] experiment: SDK init deferred until after nninitStartup\n"); return; }
     for (int i = 1; i < g_nmodules; i++) module_init(c, &g_modules[i]);
 }
 static void rtld_noop(Cpu *c) { (void)c; }
 static void rtld_init_main(Cpu *c) {
     LOG("[rtld] init hook (main) called: x0=%llx x1=%llx lr=%llx\n", (unsigned long long)c->x[0],
         (unsigned long long)c->x[1], (unsigned long long)c->x[30]);
+    if (g_nmodules < 4) for (int i = 1; i < g_nmodules; i++) module_init(c, &g_modules[i]);  // (the deferred SDK init)
     module_init(c, &g_modules[0]);
 }
 
