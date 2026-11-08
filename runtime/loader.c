@@ -273,12 +273,30 @@ static uint64_t resolve(Module *m, uint32_t symidx) {
 }
 
 static void relocate(Module *m) {
-    uint64_t rela = 0, relasz = 0, jmprel = 0, pltsz = 0;
+    uint64_t rela = 0, relasz = 0, jmprel = 0, pltsz = 0, relr = 0, relrsz = 0;
     for (uint64_t *d = (uint64_t *)m->dynamic; d[0] != DT_NULL; d += 2) {
         if (d[0] == DT_RELA) rela = m->base + d[1];
         if (d[0] == DT_RELASZ) relasz = d[1];
         if (d[0] == DT_JMPREL) jmprel = m->base + d[1];
         if (d[0] == DT_PLTRELSZ) pltsz = d[1];
+        if (d[0] == 36) relr = m->base + d[1];   // DT_RELR: packed relative relocations (newer linkers)
+        if (d[0] == 35) relrsz = d[1];           // DT_RELRSZ
+        LOG("[dyn] %s tag %llx = %llx\n", m->name, (unsigned long long)d[0], (unsigned long long)d[1]);  // (diagnostics)
+    }
+    if (relr && relrsz) {  // each even entry is an address to fix up, each odd entry a bitmap of the next 63 words
+        uint64_t *e = (uint64_t *)relr, *where = NULL, count = 0;
+        for (uint64_t i = 0; i < relrsz / 8; i++) {
+            if (!(e[i] & 1)) {
+                where = (uint64_t *)(m->base + e[i]);
+                *where += m->base; count++; where++;
+            } else {
+                uint64_t bits = e[i] >> 1;
+                for (int j = 0; bits; j++, bits >>= 1)
+                    if (bits & 1) { where[j] += m->base; count++; }
+                where += 63;
+            }
+        }
+        LOG("[reloc] %s: %llu packed (RELR) relative relocations applied\n", m->name, (unsigned long long)count);
     }
     int unresolved = 0;
     for (int pass = 0; pass < 2; pass++) {
@@ -323,15 +341,6 @@ void loader_load(const char *exefs) {
         load_nso(m, path, mods[i].base);
     }
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
-    // (diagnostics, Violet bring-up, round 3) who calls the init function and with what: nn::init::Start itself,
-    // the function pointer it hands to the init hook, and the game's startup hook
-    LOG("[diag] nn::init::Start (3-pointer spelling), 128 words:\n");
-    diag_sym("_ZN2nn4init5StartEmmPFvvES2_S2_", 128);
-    LOG("[diag] function passed to the init hook (700837acb0):\n");
-    diag_name(0x700837acb0ull);
-    diag_code(0x700837acb0ull, 48);
-    LOG("[diag] nninitStartup:\n");
-    diag_sym("nninitStartup", 48);
-
-    LOG("[diag] value there now: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
+    // (diagnostics, Violet bring-up, round 4) the game's default allocator pointer: it is null at the first malloc
+    LOG("[diag] default allocator global 7004759418 after relocation: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
 }
