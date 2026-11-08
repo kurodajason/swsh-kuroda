@@ -323,15 +323,12 @@ void loader_load(const char *exefs) {
         load_nso(m, path, mods[i].base);
     }
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
-    // (diagnostics, Violet bring-up) the code that should have set the thread pointer (tpidr_el0) before the game's malloc
-    LOG("[diag] ThreadManagerImplByHorizon constructor (msr tpidr_el0 at +98), 64 words:\n");
-    diag_code(0x700837e698ull, 64);
-    LOG("[diag] __nnmusl_init_dso around its msr tpidr_el0 (+c30), 40 words:\n");
-    diag_code(0x700840e1b0ull, 40);
-    LOG("[diag] __nnmusl_init_dso, start:\n");
-    diag_sym("__nnmusl_init_dso", 32);
-    LOG("[diag] nnosInitialize:\n");
-    diag_sym("nnosInitialize", 64);
-    LOG("[diag] _init_libc0:\n");
-    diag_sym("_init_libc0", 40);
+    // (diagnostics, Violet bring-up, round 2) the game's malloc, which now crashes later (+0x176), and the
+    // __nnmusl_init_dso branch that decides whether the thread block gets built
+    LOG("[diag] malloc in main (f_7002b7d830), 160 words:\n");
+    diag_code(0x7002b7d830ull, 160);
+    LOG("[diag] __nnmusl_init_dso, first 96 words:\n");
+    diag_code(0x700840d5e0ull, 96);
+    LOG("[diag] __nnmusl_init_dso, branch target of the allocator check (+97c), 40 words:\n");
+    diag_code(0x700840dfa0ull, 40);
 }
