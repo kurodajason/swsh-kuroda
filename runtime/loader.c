@@ -383,4 +383,10 @@ void loader_load(const char *exefs) {
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
     // (diagnostics, Violet bring-up, round 4) the game's default allocator pointer: it is null at the first malloc
     LOG("[diag] default allocator global 7004759418 after relocation: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
+    // (round 5) the code that ends in nn::mem::StandardAllocator::Initialize(this, addr = 0, ...): the function the
+    // startup calls (7002b7da90) and the one that calls Initialize (700167d510)
+    LOG("[diag] game function 7002b7da90, 100 words:\n");
+    diag_code(0x7002b7da90ull, 100);
+    LOG("[diag] game function 700167d510, 48 words:\n");
+    diag_code(0x700167d510ull, 48);
 }
