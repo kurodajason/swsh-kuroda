@@ -16,7 +16,8 @@ typedef struct __attribute__((aligned(16))) Cpu {
     void *thread;            // 312: runtime thread object
     uint64_t fpcr;           // 320: guest FPCR/FPSR (portable FP/SIMD lowering only; the asm path uses the host's)
     uint64_t fpsr;           // 328
-    uint8_t _pad[512 - 336];
+    uint64_t excl_val_hi;    // 336: upper half of the value an exclusive *pair* load saw (LDXP/LDAXP)
+    uint8_t _pad[512 - 344];
     __uint128_t v[32];       // 512
 } Cpu;
 
@@ -117,6 +118,40 @@ EXCL(8, uint8_t)
 EXCL(16, uint16_t)
 EXCL(32, uint32_t)
 EXCL(64, uint64_t)
+
+// Exclusive pairs (LDXP/LDAXP + STXP/STLXP): the two registers are one 16-byte (or 8-byte for W registers) atomic
+// unit, emulated with compare-and-swap like the single-register forms. Needs CMPXCHG16B (x86-64-v2 has it).
+typedef unsigned __int128 xpair_t;
+static inline void ldxp64(Cpu *c, uint64_t a, uint64_t *lo, uint64_t *hi) {
+    xpair_t v = __sync_val_compare_and_swap((xpair_t *)(uintptr_t)a, (xpair_t)0, (xpair_t)0);  // an atomic 16-byte read
+    c->excl_addr = a;
+    c->excl_val = (uint64_t)v;
+    c->excl_val_hi = (uint64_t)(v >> 64);
+    *lo = (uint64_t)v;
+    *hi = (uint64_t)(v >> 64);
+}
+static inline uint32_t stxp64(Cpu *c, uint64_t a, uint64_t lo, uint64_t hi) {
+    if (c->excl_addr != a) return 1;
+    c->excl_addr = ~0ull;
+    xpair_t expected = ((xpair_t)c->excl_val_hi << 64) | c->excl_val;
+    xpair_t desired = ((xpair_t)hi << 64) | lo;
+    return !__sync_bool_compare_and_swap((xpair_t *)(uintptr_t)a, expected, desired);
+}
+static inline void ldxp32(Cpu *c, uint64_t a, uint64_t *lo, uint64_t *hi) {
+    uint64_t v = __atomic_load_n((uint64_t *)(uintptr_t)a, __ATOMIC_ACQUIRE);
+    c->excl_addr = a;
+    c->excl_val = v;
+    *lo = (uint32_t)v;
+    *hi = v >> 32;
+}
+static inline uint32_t stxp32(Cpu *c, uint64_t a, uint64_t lo, uint64_t hi) {
+    if (c->excl_addr != a) return 1;
+    c->excl_addr = ~0ull;
+    uint64_t expected = c->excl_val;
+    uint64_t desired = ((uint64_t)(uint32_t)hi << 32) | (uint32_t)lo;
+    return !__atomic_compare_exchange_n((uint64_t *)(uintptr_t)a, &expected, desired, 0, __ATOMIC_SEQ_CST,
+                                        __ATOMIC_SEQ_CST);
+}
 
 // ---- flags (packed NZCV in bits 31..28)
 #define FLAG_N(c) (((c)->nzcv >> 31) & 1)
