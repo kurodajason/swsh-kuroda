@@ -15,6 +15,7 @@
 
 uint64_t loader_find_symbol(const char *name);
 void guest_call(Cpu *c, uint64_t addr);
+uint64_t kernel_claim_heap(uint64_t size);  // (kernel.c)
 
 static uint64_t orig(const char *name, uint64_t *cache) {
     if (!*cache) *cache = loader_find_symbol(name);
@@ -161,6 +162,20 @@ HLE_FUNC("_ZN2nn3mem17StandardAllocator10InitializeEPvm", heap_std_init) {
 
 HLE_FUNC("_ZN2nn3mem17StandardAllocator10InitializeEPvmb", heap_std_init_b) {
     uint64_t lr = c->x[30], size = c->x[2];
+    // Scarlet/Violet create their main allocator as Initialize(nullptr, 12 GiB, false): with a null address the SDK wants
+    // "virtual address memory" (nn::os::IsVirtualAddressMemoryEnabled), memory it maps on demand into a big address
+    // range. This runtime has no such range (and aborts in the SDK), so the allocator gets the heap region instead:
+    // real guest memory that is committed only when touched, capped at 3 GiB (the console has about 3.3 GiB too).
+    if (c->x[1] == 0 && size) {
+        const uint64_t cap = 0xC0000000ull;
+        uint64_t want = size < cap ? size : cap;
+        uint64_t base = kernel_claim_heap(want);
+        LOG("[heaps] null address (virtual address memory): the allocator gets the heap region %llx, %llx bytes instead of %llx\n",
+            (unsigned long long)base, (unsigned long long)want, (unsigned long long)size);
+        c->x[1] = base;
+        c->x[2] = want;
+        size = want;
+    }
     LOG("[heaps] StandardAllocator::Initialize(b) this=%llx addr=%llx size=%llx b=%llx lr=%llx\n", (unsigned long long)c->x[0],
         (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3], (unsigned long long)lr);
     guest_chain(c);
