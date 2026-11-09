@@ -367,11 +367,13 @@ static void fault_candidates(const char *sym, uint64_t fa) {
     } else {
         fprintf(stderr, "[fault] no load/store in the first 2000 words of %s matches\n", sym);
     }
+    fprintf(stderr, "[fault] the crashing function, from 0x180 bytes in (the crash is about 1175 host bytes in, roughly here):\n");
+    loader_diag_code(start + 0x180, 280);
     if (hhist_n > 0) {  // the guest code right after the last call into the host: where the game was when it died
         uint64_t lr = hhist[(hhist_n - 1) & (HHIST - 1)].x30;
         if (lr >= 0x7000000000ull && lr < 0x7100000000ull && !(lr & 3)) {
             fprintf(stderr, "[fault] guest code around the return address of the last host call (%llx):\n", (unsigned long long)lr);
-            loader_diag_code(lr - 0x60, 144);
+            loader_diag_code(lr - 0x20, 24);
         }
     }
 }
