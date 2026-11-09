@@ -261,13 +261,15 @@ void rt_fatal_trace(void) {
     abort();
 }
 
+void loader_trap_report(Cpu *c, uint64_t pc);  // (loader.c: the code around the trap and the guest call chain)
+
 void rt_udf(Cpu *c, uint64_t pc) {
-    (void)c;
+    loader_trap_report(c, pc);
     FATAL("undefined instruction / trap at %llx\n", pc);
 }
 
 void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) {
-    (void)c;
+    loader_trap_report(c, pc);
     FATAL("brk #%u at %llx\n", imm, pc);
 }
 

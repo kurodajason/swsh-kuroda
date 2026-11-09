@@ -295,6 +295,22 @@ static void diag_find_refs(uint64_t addr) {
     if (!n) LOG("[refs] nothing refers to %llx\n", (unsigned long long)addr);
 }
 
+// (diagnostics, Violet bring-up) at a trap / undefined instruction: the code words around it (bl targets named) and the
+// guest call chain. Called from rt_udf / rt_brk (dispatch.c).
+void loader_trap_report(Cpu *c, uint64_t pc) {
+    LOG("[trap] pc %llx, word %08x; code from pc-0x40:\n", (unsigned long long)pc, in_module(pc) ? *(uint32_t *)pc : 0u);
+    diag_code(pc - 0x40, 24);
+    uint64_t fp = c->x[29];
+    LOG("[trap] guest call chain (lr %llx):\n", (unsigned long long)c->x[30]);
+    for (int i = 0; i < 16 && fp >= GUEST_LO && fp < GUEST_HI && !(fp & 7); i++) {
+        uint64_t next = ((uint64_t *)fp)[0], ret = ((uint64_t *)fp)[1], off = 0;
+        const char *n = in_module(ret) ? loader_symbol_at(ret, &off) : NULL;
+        LOG("[trap]   %llx  %s+%llx\n", (unsigned long long)ret, n ? n : "(no symbol)", (unsigned long long)off);
+        if (next <= fp) break;
+        fp = next;
+    }
+}
+
 static uint64_t resolve(Module *m, uint32_t symidx) {
     Elf64Sym *s = sym(m, symidx);
     const char *name = symname(m, s);
@@ -383,14 +399,4 @@ void loader_load(const char *exefs) {
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
     // (diagnostics, Violet bring-up, round 4) the game's default allocator pointer: it is null at the first malloc
     LOG("[diag] default allocator global 7004759418 after relocation: %llx\n", (unsigned long long)*(uint64_t *)0x7004759418ull);
-    // (round 6) the game calls StandardAllocator::Initialize(this, addr = 0, size = 0x300000000 (12 GiB), false) on purpose
-    // (see 700167d554): what the SDK's Initialize does with a null address, and what the game's own helper returns
-    LOG("[diag] SDK StandardAllocator::Initialize (70083250cc), 96 words:\n");
-    diag_code(0x70083250ccull, 96);
-    LOG("[diag] the function it calls that ends in the abort (700816ba20), 40 words:\n");
-    diag_code(0x700816ba20ull, 40);
-    LOG("[diag] game function 700167d630 (its result is Initialize's bool), 40 words:\n");
-    diag_code(0x700167d630ull, 40);
-    LOG("[diag] game 700167d5d8 (first-use path of the static in 700167d510), 24 words:\n");
-    diag_code(0x700167d5d8ull, 24);
 }
