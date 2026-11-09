@@ -313,12 +313,70 @@ bool rt_fault_watch(uint64_t fa, uint64_t pc) {
     return true;
 }
 
+void loader_diag_code(uint64_t a, int n);  // (loader.c)
+
+// (diagnostics, Violet bring-up) which guest instruction made the access: scan the crashing function's guest code for
+// loads/stores whose address, worked out from the registers at the crash, is the faulting address.
+static void fault_candidates(const char *sym, uint64_t fa) {
+    Cpu *c = kernel_current_cpu();
+    if (!c || !sym || sym[0] != 'f' || sym[1] != '_') return;
+    uint64_t start = strtoull(sym + 2, NULL, 16);
+    if (start < 0x7000000000ull || start >= 0x7100000000ull || (start & 3)) return;
+    int found = 0;
+    uint64_t first = 0;
+    for (int i = 0; i < 2000 && found < 12; i++) {
+        uint64_t pc = start + 4ull * (uint64_t)i;
+        uint32_t w = *(uint32_t *)(uintptr_t)pc;
+        uint32_t rn = (w >> 5) & 31, V = (w >> 26) & 1, size = w >> 30;
+        uint64_t base = rn == 31 ? c->sp : c->x[rn], ea = 0, span = 1;
+        int ok = 0;
+        if ((w & 0x3B000000) == 0x39000000) {  // unsigned immediate
+            uint32_t sc = size;
+            if (V && size == 0 && ((w >> 23) & 1)) sc = 4;
+            ea = base + ((uint64_t)((w >> 10) & 0xFFF) << sc);
+            span = 1ull << sc; ok = 1;
+        } else if ((w & 0x3B200000) == 0x38000000 && ((w >> 10) & 3) != 2) {  // unscaled / pre / post index
+            int64_t imm = (int64_t)((w >> 12) & 0x1FF);
+            if (imm & 0x100) imm -= 0x200;
+            ea = ((w >> 10) & 3) == 1 ? base : base + (uint64_t)imm;
+            span = (V && size == 0 && ((w >> 23) & 1)) ? 16 : (1ull << size); ok = 1;
+        } else if ((w & 0x3B200C00) == 0x38200800) {  // register offset
+            uint32_t rm = (w >> 16) & 31, opt = (w >> 13) & 7, S = (w >> 12) & 1;
+            uint64_t m = rm == 31 ? 0 : c->x[rm];
+            if (opt == 2) m = (uint32_t)m; else if (opt == 6) m = (uint64_t)(int64_t)(int32_t)m;
+            uint32_t sc = (V && size == 0 && ((w >> 23) & 1)) ? 4 : size;
+            ea = base + (S ? m << sc : m);
+            span = 1ull << sc; ok = 1;
+        } else if ((w & 0x3A000000) == 0x28000000) {  // pairs
+            uint32_t mode = (w >> 23) & 3;
+            int64_t imm = (int64_t)((w >> 15) & 0x7F);
+            if (imm & 0x40) imm -= 0x80;
+            uint32_t sc = V ? 2 + size : (size == 2 ? 3 : 2);
+            ea = mode == 1 ? base : base + (uint64_t)(imm << sc);
+            span = 2ull << sc; ok = 1;
+        }
+        if (!ok || fa < ea || fa >= ea + span) continue;
+        if (!found) first = pc;
+        found++;
+        fprintf(stderr, "[fault] candidate instruction at %llx: word %08x, base x%u = %llx\n", (unsigned long long)pc, w, rn,
+                (unsigned long long)base);
+    }
+    if (found) {
+        fprintf(stderr, "[fault] code around the first candidate:\n");
+        loader_diag_code(first - 0x60, 32);
+    } else {
+        fprintf(stderr, "[fault] no load/store in the first 2000 words of %s matches; function start:\n", sym);
+        loader_diag_code(start, 160);
+    }
+}
+
 void rt_fault_report(const char *what, uint64_t fa, uint64_t pc, uint64_t lr) {
     uint64_t po = 0, lo = 0;
     const char *ps = host_sym(pc, &po), *ls = host_sym(lr, &lo);
     fprintf(stderr, "\n*** %s accessing %#llx\n    host pc %llx (%s+%llx)\n    host lr %llx (%s)\n", what,
             (unsigned long long)fa, (unsigned long long)pc, ps ? ps : "?", (unsigned long long)po,
             (unsigned long long)lr, ls ? ls : "?");
+    fault_candidates(ps, fa);
     rt_fatal_trace();
 }
 

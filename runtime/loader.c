@@ -295,6 +295,8 @@ static void diag_find_refs(uint64_t addr) {
     if (!n) LOG("[refs] nothing refers to %llx\n", (unsigned long long)addr);
 }
 
+void loader_diag_code(uint64_t a, int n) { diag_code(a, n); }  // (for the crash report in dispatch.c)
+
 // (diagnostics, Violet bring-up) at a trap / undefined instruction: the code words around it (bl targets named) and the
 // guest call chain. Called from rt_udf / rt_brk (dispatch.c).
 void loader_trap_report(Cpu *c, uint64_t pc) {
