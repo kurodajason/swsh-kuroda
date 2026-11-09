@@ -754,6 +754,18 @@ static void svc_entry(Cpu *c, uint32_t imm, uint64_t pc) {
         c->x[1], c->x[2], pc, (unsigned long long)c->tpidr);
 }
 
+// (Violet) The game's allocator is created with a null address and a 12 GiB size: "virtual address memory", where the SDK
+// maps memory on demand (nn::os::IsVirtualAddressMemoryEnabled, which is false here, so the SDK aborts). This runtime has
+// no such address space, so runtime/hle/heaps.c hands that allocator the heap region instead, claimed here exactly as
+// SetHeapSize would (guest pages in the window are committed when first touched).
+uint64_t kernel_claim_heap(uint64_t size) {
+    if (size > HEAP_MAX) size = HEAP_MAX;
+    heap_size = size;
+    region_remove(HEAP_BASE);
+    if (size) region_add(HEAP_BASE, size, 5, 3);
+    return HEAP_BASE;
+}
+
 // (diagnostics, Violet bring-up) why the SDK aborted (svcBreak): the guest call chain from the frame pointers, and the
 // text strings (assert expression, function, file) that the abort path left on the stack
 static int in_game_module(uint64_t v) {
