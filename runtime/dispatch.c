@@ -317,7 +317,7 @@ void loader_diag_code(uint64_t a, int n);  // (loader.c)
 
 // (diagnostics, Violet bring-up) which guest instruction made the access: scan the crashing function's guest code for
 // loads/stores whose address, worked out from the registers at the crash, is the faulting address.
-static void fault_candidates(const char *sym, uint64_t fa) {
+static void fault_candidates(const char *sym, uint64_t fa, uint64_t hpc) {
     Cpu *c = kernel_current_cpu();
     if (!c || !sym || sym[0] != 'f' || sym[1] != '_') return;
     uint64_t start = strtoull(sym + 2, NULL, 16);
@@ -367,8 +367,19 @@ static void fault_candidates(const char *sym, uint64_t fa) {
     } else {
         fprintf(stderr, "[fault] no load/store in the first 2000 words of %s matches\n", sym);
     }
-    fprintf(stderr, "[fault] the crashing function, from 0x180 bytes in (the crash is about 1175 host bytes in, roughly here):\n");
-    loader_diag_code(start + 0x180, 280);
+    {   // the host machine code just before the faulting instruction: the displacements and registers it uses identify the
+        // guest instruction (the generated code has no guest pc to report)
+        const unsigned char *p = (const unsigned char *)(uintptr_t)hpc;
+        fprintf(stderr, "[fault] host code bytes around the faulting instruction (host pc %llx; the last 16 bytes start at it):",
+                (unsigned long long)hpc);
+        for (int i = -96; i < 16; i++) {
+            if (((i + 96) & 15) == 0) fprintf(stderr, "\n  %+4d:", i);
+            fprintf(stderr, " %02x", p[i]);
+        }
+        fprintf(stderr, "\n");
+    }
+    fprintf(stderr, "[fault] the whole crashing function (%s), 1400 words from its start:\n", sym);
+    loader_diag_code(start, 1400);
     if (hhist_n > 0) {  // the guest code right after the last call into the host: where the game was when it died
         uint64_t lr = hhist[(hhist_n - 1) & (HHIST - 1)].x30;
         if (lr >= 0x7000000000ull && lr < 0x7100000000ull && !(lr & 3)) {
@@ -384,7 +395,7 @@ void rt_fault_report(const char *what, uint64_t fa, uint64_t pc, uint64_t lr) {
     fprintf(stderr, "\n*** %s accessing %#llx\n    host pc %llx (%s+%llx)\n    host lr %llx (%s)\n", what,
             (unsigned long long)fa, (unsigned long long)pc, ps ? ps : "?", (unsigned long long)po,
             (unsigned long long)lr, ls ? ls : "?");
-    fault_candidates(ps, fa);
+    fault_candidates(ps, fa, pc);
     rt_fatal_trace();
 }
 
