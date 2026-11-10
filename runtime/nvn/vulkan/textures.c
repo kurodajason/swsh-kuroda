@@ -236,6 +236,23 @@ void vk_collect_dead(void) {
     ndead = k;
 }
 
+// vmaCreateImage that, when the GPU is out of memory, first frees the images the game already destroyed (they are only
+// released once the GPU has finished with them, so a scene change that loads many textures can run out while the old
+// ones still sit in the queue) and tries again.
+static VkResult create_image_retry(const VkImageCreateInfo *ci, const VmaAllocationCreateInfo *ai, VkImage *img, VmaAllocation *mem) {
+    VkResult r = vmaCreateImage(g_vk.vma, ci, ai, img, mem, NULL);
+    if ((r == VK_ERROR_OUT_OF_DEVICE_MEMORY || r == VK_ERROR_OUT_OF_HOST_MEMORY) && ndead > 0) {
+        uint64_t last = 0;
+        for (int i = 0; i < ndead; i++) if (dead[i].seq > last) last = dead[i].seq;
+        int n = ndead;
+        vk_wait_seq(last);
+        vk_collect_dead();
+        LOG("[vk] out of GPU memory: freed %d pending images, trying again\n", n);
+        r = vmaCreateImage(g_vk.vma, ci, ai, img, mem, NULL);
+    }
+    return r;
+}
+
 static void create_image(NvnTexture *t, TexBackend *b) {
     VkFmt mf = fmt_of(t->format);
     b->sx = b->scalable ? g_rs_x : 1;
@@ -295,14 +312,14 @@ static void create_image(NvnTexture *t, TexBackend *b) {
                             .samples = (VkSampleCountFlagBits)samples, .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = usage,
                             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
     VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
-    VkResult r = vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL);
+    VkResult r = create_image_retry(&ci, &ai, &b->image, &b->mem);
     if (r != VK_SUCCESS) {
         LOG("[vk] image creation failed (%d): nvn fmt %#x %ux%ux%u target %u\n", r, t->format, t->width, t->height, t->depth, t->target);
         ci.format = vf = VK_FORMAT_R8G8B8A8_UNORM;
         ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         ci.flags &= ~VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-        VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL));
+        VK_CHECK(create_image_retry(&ci, &ai, &b->image, &b->mem));
         depthfmt = false;
     }
     b->format = vf;
