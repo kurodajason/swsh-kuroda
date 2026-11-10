@@ -894,6 +894,10 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0xf0f0000000000000ull, 0xfff8000000000000ull) || OPM(0x50b0000000000000ull, 0xfff8000000000000ull) ||
                OPM(0xef98000000000000ull, 0xfff8000000000000ull)) {
         // DEPBAR / NOP / MEMBAR
+    } else if (OPM(0xeb20000000000000ull, 0xffe0000000000000ull) || OPM(0xeb40000000000000ull, 0xffe0000000000000ull)) {
+        // SUST (image store) / SURED (image reduction): the backend has no storage images, so these writes are dropped.
+        // They are side effects only (no result register), so the rest of the shader, and its colour output, still runs.
+        sp(&c->body, "    // (image store / reduction dropped)\n");
     } else if (OPM(0xe00000000000ff00ull, 0xff0000400000ff00ull) || OPM(0xe000004000000000ull, 0xff00004000000000ull)) {
         // IPA: interpolate fragment input
         bool idx = bits(w, 38, 1);
