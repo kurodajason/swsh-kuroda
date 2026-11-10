@@ -484,44 +484,60 @@ NVN(nvnTextureReadTexels) { LOG("[nvn] ReadTexels not implemented\n"); (void)c; 
 NVN(nvnTextureReadTexelsStrided) { (void)c; }
 
 // ================================================================== samplers
-// SamplerBuilder: device@0 then an NvnSamplerDesc at 8
-#define SD ((NvnSamplerDesc *)(AP(0) + 8))
-NVN(nvnSamplerBuilderSetDevice) { G(uint64_t, A(0), 0) = A(1); }
-NVN(nvnSamplerBuilderSetDefaults) {
-    NvnSamplerDesc *d = SD;
+// SamplerBuilder: the guest's NVNsamplerBuilder is only 0x40 bytes here (the game keeps it on the stack right below its
+// saved x29/x30), so everything has to fit in 0x40: the device, then the settings packed into 16-bit fields.
+// (An 8 + 72 byte copy of NvnSamplerDesc used to spill over the saved registers and crash the game on return.)
+typedef struct {
+    uint64_t device;
+    uint16_t min_filter, mag_filter, wrap[3], compare_mode, compare_func, reduction;
+    float lod_min, lod_max, lod_bias, max_aniso;
+    float border[4];
+} NvnSamplerBuilderG;  // 56 bytes
+_Static_assert(sizeof(NvnSamplerBuilderG) <= 0x40, "the guest's NVNsamplerBuilder is 0x40 bytes");
+static void sb_to_desc(const NvnSamplerBuilderG *b, NvnSamplerDesc *d) {
     memset(d, 0, sizeof *d);
-    d->min_filter = 0; d->mag_filter = 0;
-    d->wrap[0] = d->wrap[1] = d->wrap[2] = 1;  // REPEAT
-    d->lod_min = 0; d->lod_max = 1000.0f; d->max_aniso = 1.0f;
-    d->compare_func = 4;
+    d->min_filter = b->min_filter; d->mag_filter = b->mag_filter;
+    for (int i = 0; i < 3; i++) d->wrap[i] = b->wrap[i];
+    d->compare_mode = b->compare_mode; d->compare_func = b->compare_func; d->reduction = b->reduction;
+    d->lod_min = b->lod_min; d->lod_max = b->lod_max; d->lod_bias = b->lod_bias; d->max_aniso = b->max_aniso;
+    memcpy(d->border, b->border, sizeof d->border);
 }
-NVN(nvnSamplerBuilderSetMinMagFilter) { SD->min_filter = (uint32_t)A(1); SD->mag_filter = (uint32_t)A(2); }
-NVN(nvnSamplerBuilderSetWrapMode) { SD->wrap[0] = (uint32_t)A(1); SD->wrap[1] = (uint32_t)A(2); SD->wrap[2] = (uint32_t)A(3); }
-NVN(nvnSamplerBuilderSetLodClamp) { SD->lod_min = AF(0); SD->lod_max = AF(1); }
-NVN(nvnSamplerBuilderSetLodBias) { SD->lod_bias = AF(0); }
-NVN(nvnSamplerBuilderSetCompare) { SD->compare_mode = (uint32_t)A(1); SD->compare_func = (uint32_t)A(2); }
-NVN(nvnSamplerBuilderSetBorderColor) { memcpy(SD->border, AP(1), 16); }
-NVN(nvnSamplerBuilderSetBorderColori) { memcpy(SD->border, AP(1), 16); }
-NVN(nvnSamplerBuilderSetBorderColorui) { memcpy(SD->border, AP(1), 16); }
-NVN(nvnSamplerBuilderSetMaxAnisotropy) { SD->max_aniso = AF(0); }
-NVN(nvnSamplerBuilderSetReductionFilter) { SD->reduction = (uint32_t)A(1); }
+#define SB ((NvnSamplerBuilderG *)AP(0))
+NVN(nvnSamplerBuilderSetDevice) { SB->device = A(1); }
+NVN(nvnSamplerBuilderSetDefaults) {
+    NvnSamplerBuilderG *b = SB;
+    memset((char *)b + 8, 0, sizeof *b - 8);
+    b->wrap[0] = b->wrap[1] = b->wrap[2] = 1;  // REPEAT
+    b->lod_min = 0; b->lod_max = 1000.0f; b->max_aniso = 1.0f;
+    b->compare_func = 4;
+}
+NVN(nvnSamplerBuilderSetMinMagFilter) { SB->min_filter = (uint16_t)A(1); SB->mag_filter = (uint16_t)A(2); }
+NVN(nvnSamplerBuilderSetWrapMode) { SB->wrap[0] = (uint16_t)A(1); SB->wrap[1] = (uint16_t)A(2); SB->wrap[2] = (uint16_t)A(3); }
+NVN(nvnSamplerBuilderSetLodClamp) { SB->lod_min = AF(0); SB->lod_max = AF(1); }
+NVN(nvnSamplerBuilderSetLodBias) { SB->lod_bias = AF(0); }
+NVN(nvnSamplerBuilderSetCompare) { SB->compare_mode = (uint16_t)A(1); SB->compare_func = (uint16_t)A(2); }
+NVN(nvnSamplerBuilderSetBorderColor) { memcpy(SB->border, AP(1), 16); }
+NVN(nvnSamplerBuilderSetBorderColori) { memcpy(SB->border, AP(1), 16); }
+NVN(nvnSamplerBuilderSetBorderColorui) { memcpy(SB->border, AP(1), 16); }
+NVN(nvnSamplerBuilderSetMaxAnisotropy) { SB->max_aniso = AF(0); }
+NVN(nvnSamplerBuilderSetReductionFilter) { SB->reduction = (uint16_t)A(1); }
 NVN(nvnSamplerBuilderSetLodSnap) { (void)c; }
-NVN(nvnSamplerBuilderGetDevice) { RET(G(uint64_t, A(0), 0)); }
-NVN(nvnSamplerBuilderGetMinMagFilter) { *(uint32_t *)AP(1) = SD->min_filter; *(uint32_t *)AP(2) = SD->mag_filter; }
-NVN(nvnSamplerBuilderGetWrapMode) { for (int i = 0; i < 3; i++) *(uint32_t *)AP(1 + i) = SD->wrap[i]; }
-NVN(nvnSamplerBuilderGetLodClamp) { *(float *)AP(1) = SD->lod_min; *(float *)AP(2) = SD->lod_max; }
-NVN(nvnSamplerBuilderGetLodBias) { RETF(SD->lod_bias); }
-NVN(nvnSamplerBuilderGetCompare) { *(uint32_t *)AP(1) = SD->compare_mode; *(uint32_t *)AP(2) = SD->compare_func; }
-NVN(nvnSamplerBuilderGetBorderColor) { memcpy(AP(1), SD->border, 16); }
-NVN(nvnSamplerBuilderGetBorderColori) { memcpy(AP(1), SD->border, 16); }
-NVN(nvnSamplerBuilderGetBorderColorui) { memcpy(AP(1), SD->border, 16); }
-NVN(nvnSamplerBuilderGetMaxAnisotropy) { RETF(SD->max_aniso); }
-NVN(nvnSamplerBuilderGetReductionFilter) { RET(SD->reduction); }
+NVN(nvnSamplerBuilderGetDevice) { RET(SB->device); }
+NVN(nvnSamplerBuilderGetMinMagFilter) { *(uint32_t *)AP(1) = SB->min_filter; *(uint32_t *)AP(2) = SB->mag_filter; }
+NVN(nvnSamplerBuilderGetWrapMode) { for (int i = 0; i < 3; i++) *(uint32_t *)AP(1 + i) = SB->wrap[i]; }
+NVN(nvnSamplerBuilderGetLodClamp) { *(float *)AP(1) = SB->lod_min; *(float *)AP(2) = SB->lod_max; }
+NVN(nvnSamplerBuilderGetLodBias) { RETF(SB->lod_bias); }
+NVN(nvnSamplerBuilderGetCompare) { *(uint32_t *)AP(1) = SB->compare_mode; *(uint32_t *)AP(2) = SB->compare_func; }
+NVN(nvnSamplerBuilderGetBorderColor) { memcpy(AP(1), SB->border, 16); }
+NVN(nvnSamplerBuilderGetBorderColori) { memcpy(AP(1), SB->border, 16); }
+NVN(nvnSamplerBuilderGetBorderColorui) { memcpy(AP(1), SB->border, 16); }
+NVN(nvnSamplerBuilderGetMaxAnisotropy) { RETF(SB->max_aniso); }
+NVN(nvnSamplerBuilderGetReductionFilter) { RET(SB->reduction); }
 NVN(nvnSamplerBuilderGetLodSnap) { RETF(0); }
 
 NVN(nvnSamplerInitialize) {
     NvnSamplerDesc *d = malloc(sizeof *d);
-    *d = *(NvnSamplerDesc *)(AP(1) + 8);
+    sb_to_desc((const NvnSamplerBuilderG *)AP(1), d);
     SET_HOST(A(0), d);
     RET(1);
 }
@@ -597,7 +613,7 @@ NVN(nvnSamplerPoolRegisterSampler) {
 NVN(nvnSamplerPoolRegisterSamplerBuilder) {
     NvnDescPool *d = HOST(NvnDescPool, A(0));
     int id = (int)A(1);
-    if (id >= 0 && id < d->count) ((NvnSamplerDesc *)d->entries)[id] = *(NvnSamplerDesc *)(AP(2) + 8);
+    if (id >= 0 && id < d->count) sb_to_desc((const NvnSamplerBuilderG *)AP(2), &((NvnSamplerDesc *)d->entries)[id]);
 }
 
 NvnDescPool *nvn_find_pool(NvnDescPool **reg, uint64_t guest_pool) {
