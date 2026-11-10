@@ -752,6 +752,27 @@ static void emit_texs(Ctx *c, uint64_t w, bool fetch) {
     write_tex_result(c, slot, call, mask, d0, d1, true, !bits(w, 59, 1));  // 0xd0/0xd2: .F16 results
 }
 
+// TLD4S: gather the four texels around a point (textureGather), the usual way to do shadow-map filtering. Coordinates
+// are laid out like TEXS: plain 2D = x in gpr8, y in gpr20; with a depth compare x, y = gpr8, gpr8+1 and the reference
+// value in gpr20. The four results go to gpr0, gpr0+1, gpr28, gpr28+1 (halves packed in pairs with .F16, bit 55).
+static void emit_tld4s(Ctx *c, uint64_t w) {
+    int d0 = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8), d1 = (int)bits(w, 28, 8);
+    uint32_t index = (uint32_t)bits(w, 36, 13);
+    bool dc = bits(w, 50, 1), aoffi = bits(w, 51, 1);
+    int comp = (int)bits(w, 52, 2);
+    if (!c->glsl) { fail(c, "tld4s (GLSL only)"); return; }
+    if (aoffi) { fail(c, "tld4s with texel offsets"); return; }
+    char ra[16], ra1[16], rb[16], fa[64], fa1[64], fb[64];
+    const char *A = reg(c, a, ra), *A1 = reg(c, a == RZ ? RZ : a + 1, ra1), *Bv = reg(c, b, rb);
+    sprintf(fa, "as_type<float>(%s)", A); sprintf(fa1, "as_type<float>(%s)", A1); sprintf(fb, "as_type<float>(%s)", Bv);
+    int slot = tex_slot(c, index, TEXTYPE_2D, dc, false);
+    if (c->fail) return;
+    char call[512];
+    if (dc) sprintf(call, "vec4(textureGather(t%d, vec2(%s, %s), %s))", slot, fa, fa1, fb);
+    else sprintf(call, "textureGather(t%d, vec2(%s, %s), %d)", slot, fa, fb, comp);
+    write_tex_result(c, slot, call, 15, d0, d1, true, bits(w, 55, 1));
+}
+
 // TEX (full form): coordinates from consecutive registers at gpr8, extra parameters at gpr20.
 static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
@@ -925,6 +946,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         emit_tex(c, w, false);
     } else if (OPM(0xdeb8000000000000ull, 0xfff8000000000000ull)) {  // TEX.B (bindless)
         emit_tex(c, w, true);
+    } else if (OPM(0xdf00000000000000ull, 0xff40000000000000ull)) {  // TLD4S
+        emit_tld4s(c, w);
     } else if (OPM(0xdf48000000000000ull, 0xfff8000000000000ull)) {  // TXQ
         uint32_t index = (uint32_t)bits(w, 36, 13);
         int qt = (int)bits(w, 22, 6);
