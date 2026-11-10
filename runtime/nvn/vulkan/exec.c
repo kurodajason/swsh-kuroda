@@ -3407,6 +3407,18 @@ static CsProg *compute_program(NvnProgram *np) {
     cp->p.vi = cp->si;
     if (!cp->si->msl) {
         LOG("[compute] translate failed: %s (code %llx)\n", cp->si->error, (unsigned long long)ss->code_addr);
+        {   // (diagnostics, Violet bring-up: what is at that address, and what the control section says about it)
+            const uint32_t *cw = (const uint32_t *)(uintptr_t)ss->code_addr;
+            LOG("[compute]   program has %d stage(s), mask %#x; this one: const_offset %#x const_size %#x control %p\n", __builtin_popcount(st.program->stage_mask),
+                st.program->stage_mask, ss->const_offset, ss->const_size, (const void *)ss->control);
+            for (int row = 0; row < 12; row++)
+                LOG("[compute]   code+%03x: %08x %08x %08x %08x\n", row * 16, cw[row * 4], cw[row * 4 + 1], cw[row * 4 + 2], cw[row * 4 + 3]);
+            if (ss->control) {
+                const uint32_t *ct = (const uint32_t *)ss->control;
+                LOG("[compute]   control+6f8: %08x %08x %08x %08x %08x %08x\n", ct[0x6f8 / 4], ct[0x6fc / 4], ct[0x700 / 4], ct[0x704 / 4], ct[0x708 / 4], ct[0x70c / 4]);
+                LOG("[compute]   control+740 (local size): %u %u %u\n", ct[0x748 / 4], ct[0x74c / 4], ct[0x750 / 4]);
+            }
+        }
         atomic_store(&cp->p.state, 2);
         return cp;
     }
