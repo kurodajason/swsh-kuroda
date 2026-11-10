@@ -164,13 +164,13 @@ HLE_FUNC("_ZN2nn3mem17StandardAllocator10InitializeEPvmb", heap_std_init_b) {
     uint64_t lr = c->x[30], size = c->x[2];
     // Scarlet/Violet create their main allocator as Initialize(nullptr, 12 GiB, false): with a null address the SDK wants
     // "virtual address memory" (nn::os::IsVirtualAddressMemoryEnabled), memory it maps on demand into a big address
-    // range. This runtime has no such range (and aborts in the SDK), so the allocator gets the heap region instead:
-    // real guest memory that is committed only when touched, capped at 3 GiB (the console has about 3.3 GiB too).
+    // range. This runtime has no such range (and aborts in the SDK), so the allocator gets a block of guest memory of its
+    // own (kernel_claim_heap), never the memory heap the SDK carves its second allocator from.
     if (c->x[1] == 0 && size) {
-        const uint64_t cap = 0xC0000000ull;
+        const uint64_t cap = 0x70000000ull;  // (kernel_claim_heap's block: 1.75 GiB, separate from the memory heap)
         uint64_t want = size < cap ? size : cap;
         uint64_t base = kernel_claim_heap(want);
-        LOG("[heaps] null address (virtual address memory): the allocator gets the heap region %llx, %llx bytes instead of %llx\n",
+        LOG("[heaps] null address (virtual address memory): the allocator gets its own guest memory block %llx, %llx bytes instead of %llx\n",
             (unsigned long long)base, (unsigned long long)want, (unsigned long long)size);
         c->x[1] = base;
         c->x[2] = want;
