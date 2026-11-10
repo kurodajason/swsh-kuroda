@@ -241,6 +241,24 @@ void vk_collect_dead(void) {
 // ones still sit in the queue) and tries again.
 static VkResult create_image_retry(const VkImageCreateInfo *ci, const VmaAllocationCreateInfo *ai, VkImage *img, VmaAllocation *mem) {
     VkResult r = vmaCreateImage(g_vk.vma, ci, ai, img, mem, NULL);
+    if (r == VK_ERROR_OUT_OF_DEVICE_MEMORY || r == VK_ERROR_OUT_OF_HOST_MEMORY) {  // (diagnostics: what is using the memory)
+        static int nlog;
+        if (nlog++ < 4) {
+            VmaBudget bud[VK_MAX_MEMORY_HEAPS];
+            VmaTotalStatistics st;
+            vmaGetHeapBudgets(g_vk.vma, bud);
+            vmaCalculateStatistics(g_vk.vma, &st);
+            const VkPhysicalDeviceMemoryProperties *mp;
+            vmaGetMemoryProperties(g_vk.vma, &mp);
+            for (uint32_t h = 0; h < mp->memoryHeapCount; h++)
+                LOG("[vk] memory heap %u: size %llu MB, driver budget %llu MB, in use %llu MB (allocated by us %llu MB)\n", h,
+                    (unsigned long long)(mp->memoryHeaps[h].size >> 20), (unsigned long long)(bud[h].budget >> 20),
+                    (unsigned long long)(bud[h].usage >> 20), (unsigned long long)(bud[h].statistics.allocationBytes >> 20));
+            LOG("[vk] our allocations: %u, %llu MB (%llu MB of blocks); %d images waiting to be freed\n", st.total.statistics.allocationCount,
+                (unsigned long long)(st.total.statistics.allocationBytes >> 20),
+                (unsigned long long)(st.total.statistics.blockBytes >> 20), ndead);
+        }
+    }
     if ((r == VK_ERROR_OUT_OF_DEVICE_MEMORY || r == VK_ERROR_OUT_OF_HOST_MEMORY) && ndead > 0) {
         uint64_t last = 0;
         for (int i = 0; i < ndead; i++) if (dead[i].seq > last) last = dead[i].seq;
