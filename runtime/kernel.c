@@ -754,16 +754,18 @@ static void svc_entry(Cpu *c, uint32_t imm, uint64_t pc) {
         c->x[1], c->x[2], pc, (unsigned long long)c->tpidr);
 }
 
-// (Violet) The game's allocator is created with a null address and a 12 GiB size: "virtual address memory", where the SDK
-// maps memory on demand (nn::os::IsVirtualAddressMemoryEnabled, which is false here, so the SDK aborts). This runtime has
-// no such address space, so runtime/hle/heaps.c hands that allocator the heap region instead, claimed here exactly as
-// SetHeapSize would (guest pages in the window are committed when first touched).
+// (Violet) The game's main allocator is created with a null address and a 12 GiB size: "virtual address memory", where the
+// SDK maps memory on demand (nn::os::IsVirtualAddressMemoryEnabled, which is false here, so the SDK aborts). This runtime
+// has no such address space, so runtime/hle/heaps.c hands that allocator a block of guest memory of its own, claimed here.
+// It must NOT be the heap region: the SDK carves its second allocator out of the memory heap (SetHeapSize, at HEAP_BASE),
+// and two allocators over the same memory hand out the same addresses (a name string landed on an object's vtable).
+// The block sits in the unused gap between the modules and the host-function window (Violet has no subsdk1).
+#define VA_BASE 0x7010000000ull
+#define VA_MAX  0x0070000000ull  // 1.75 GiB, up to HLE_BASE
 uint64_t kernel_claim_heap(uint64_t size) {
-    if (size > HEAP_MAX) size = HEAP_MAX;
-    heap_size = size;
-    region_remove(HEAP_BASE);
-    if (size) region_add(HEAP_BASE, size, 5, 3);
-    return HEAP_BASE;
+    if (size > VA_MAX) size = VA_MAX;
+    if (size) region_add(VA_BASE, size, 5, 3);  // (guest pages in the window are committed when first touched)
+    return VA_BASE;
 }
 
 // (diagnostics, Violet bring-up) why the SDK aborted (svcBreak): the guest call chain from the frame pointers, and the
